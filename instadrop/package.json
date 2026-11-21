@@ -1,0 +1,11 @@
+{
+  "name": "instadrop",
+  "version": "3.0.0",
+  "description": "Regional delivery: food, groceries, drinks and home items with live tracking, 9 languages and a scalable sign-in system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/auth.test.js"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,9 @@
+# Local PostgreSQL for development:  docker compose up -d   (not tested in the build sandbox; the app was tested against a native PostgreSQL 16)
+# Then: DATABASE_URL=postgres://instadrop:instadrop@localhost:5432/instadrop node server.js
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_USER: instadrop, POSTGRES_PASSWORD: instadrop, POSTGRES_DB: instadrop }
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+volumes: { pgdata: {} }
