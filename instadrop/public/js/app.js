@@ -38,8 +38,11 @@ let CUR = 'USD', MAP = null, MK = {}, LINES = {}, GPS = null, VMARK = null;
 const SVC = .05, FREE = 30;
 const saveCart = () => LS.set('if_cart', S.cart);
 
+const X = { closed: 'Closed', closedMsg: 'This place is closed right now. You can still schedule an order for later.', soldOut: 'Sold out', tax: 'Tax ({r}%)', taxIncl: 'Includes tax {r}% ({amt})', follow: 'Follow rider', fitAll: 'Show everything',
+  secAgo: '{n}s ago', minAgo: '{n} min ago', updated: 'Updated {ago}', signalLost: 'No signal, last seen {ago}' };
 // ───────────────────────── language
 const t = (k, p) => {
+  if (X[k] && !((DICT[S.lang] || {})[k])) { const e = X[k]; return p ? e.replace(/\{(\w+)\}/g, (m, x) => p[x] !== undefined ? p[x] : m) : e; }
   let s = (DICT[S.lang] || {})[k]; if (s === undefined) s = DICT.en[k]; if (s === undefined) return k;
   return p ? s.replace(/\{(\w+)\}/g, (m, x) => p[x] !== undefined ? p[x] : m) : s;
 };
@@ -146,10 +149,10 @@ function renderHeader() {
   $('#hdr').innerHTML = `<button class="brand" data-mode="customer" aria-label="Instadrop">${LOGO}<span>insta<i>drop</i></span></button><span class="spacer"></span>
   ${staff ? `<button class="lnk" data-mode="customer">← ${esc(t('toApp'))}</button>` : ''}
   <button class="locchip" data-act="region" aria-label="${esc(t('deliverTo'))}: ${esc(place)}"><i class="dot ${S.geo ? 'live' : ''}"></i><span>${esc(place)}</span></button>
-  <button class="iconbtn" data-act="account" aria-label="${esc(A.user ? t('account') : t('signIn'))}">${A.user ? '👤 <span class="nm">' + esc(A.user.name.split(' ')[0]) + '</span>' : '👤 <span>' + esc(t('signIn')) + '</span>'}</button>
-  <button class="iconbtn" data-act="prefs" aria-label="${esc(t('language'))}">🌐 <span>${esc(S.lang.toUpperCase())}</span></button>
-  <button class="iconbtn" id="theme" aria-label="${esc(t('theme'))}">${themeNow() === 'dark' ? '☀️' : '🌙'}</button>
-  <button class="cartbtn" id="cartbtn" ${staff ? 'hidden' : ''}>🛍 <span class="lbl">${esc(t('cart'))}</span><b id="count">${cnt()}</b></button>`;
+  <button class="iconbtn" data-act="account" aria-label="${esc(A.user ? t('account') : t('signIn'))}">${A.user ? ic('user')+' <span class="nm">' + esc(A.user.name.split(' ')[0]) + '</span>' : ic('user')+' <span>' + esc(t('signIn')) + '</span>'}</button>
+  <button class="iconbtn" data-act="prefs" aria-label="${esc(t('language'))}">${ic('globe')} <span>${esc(S.lang.toUpperCase())}</span></button>
+  <button class="iconbtn" id="theme" aria-label="${esc(t('theme'))}">${ic(themeNow() === 'dark' ? 'sun' : 'moon')}</button>
+  <button class="cartbtn" id="cartbtn" ${staff ? 'hidden' : ''}>${ic('bag')} <span class="lbl">${esc(t('cart'))}</span><b id="count">${cnt()}</b></button>`;
 }
 function closeAll() { S.m = null; S.sheet = null; ['#modal', '#sheet', '#pick'].forEach(s => $(s).classList.remove('on')); $('#scrim').classList.remove('on'); }
 function openSheet(kind) { S.sheet = kind; sheetUI(); $('#pick').classList.add('on'); $('#scrim').classList.add('on'); }
@@ -196,15 +199,15 @@ function listData() {
 }
 function cardHTML(v) {
   const d = dist(v), far = d !== null && d > v.radius, pk = S.info.mode === 'pickup';
-  return `<button class="card" data-v="${v.id}"><div class="sw s${hs(v.id) % 6}">${ph(v.img)}${v.emoji}<span class="heart" data-heart="${v.id}" role="button" aria-label="♥ ${esc(v.name)}">${S.fav.includes(v.id) ? '♥' : '♡'}</span>${d !== null ? `<span class="dist ${far ? 'far' : ''}">${distLabel(d)}</span>` : ''}<span class="eta">${pk ? esc(t('pickupTag')) : esc(t('minShort', { n: v.eta }))}</span></div>
+  return `<button class="card" data-v="${v.id}"><div class="sw s${hs(v.id) % 6}">${pic(v.emoji)}${ph(v.img)}<span class="heart ${S.fav.includes(v.id) ? 'on' : ''}" data-heart="${v.id}" role="button" aria-label="♥ ${esc(v.name)}">${S.fav.includes(v.id) ? icf('heart') : ic('heart')}</span>${d !== null ? `<span class="dist ${far ? 'far' : ''}">${distLabel(d)}</span>` : ''}<span class="eta ${v.open === false ? 'closed' : ''}">${v.open === false ? esc(t('closed')) : pk ? esc(t('pickupTag')) : esc(t('minShort', { n: v.eta }))}</span></div>
   <div class="b"><h3>${esc(v.name)}</h3><div class="meta"><span class="star">${v.rating.toFixed(1)} ★</span> (${v.reviews}+) · ${esc(v.cat)} · ${esc(v.city)}</div><div class="meta">${far ? '⚠ ' + esc(t('outRange')) : pk ? esc(t('noFee')) : esc(t('feeDelivery', { fee: fmt(v.fee, v.cur) }))}</div></div></button>`;
 }
 function gridHTML() {
   const { list, sc } = listData();
-  if (!S.vendors.length) return `<div class="empty"><big>🗺️</big>${esc(t('notServing', { region: regionName() }))}</div>`;
+  if (!S.vendors.length) return `<div class="empty"><big>${ic('map')}</big>${esc(t('notServing', { region: regionName() }))}</div>`;
   if (S.vmode === 'map') return '<div id="vmap" class="vmap" role="region" aria-label="' + esc(t('viewMap')) + '"></div>' + (list.length ? '' : `<p class="meta">${esc(t('noMatch'))}</p>`);
   const fy = S.int.length && S.tab === 'all' && !S.q && !S.cz && !S.city && !Object.values(S.fl).some(Boolean) ? list.filter(v => sc.get(v.id) > 0).slice(0, 8) : [];
-  return (fy.length ? `<div class="sec"><h2>✨ ${esc(t('forYou'))}</h2></div><div class="scroll">${fy.map(cardHTML).join('')}</div>` : '')
+  return (fy.length ? `<div class="sec"><h2>${ic('sparkles')} ${esc(t('forYou'))}</h2></div><div class="scroll">${fy.map(cardHTML).join('')}</div>` : '')
     + `<div class="sec"><h2>${esc(t(HEAD[S.tab], { region: S.city ? S.city + ', ' + regionName() : regionName() }))}</h2><span class="meta">${esc(t('places', { n: list.length }))}</span></div>`
     + `<div class="grid">${list.map(cardHTML).join('') || `<p class="meta">${esc(t('noMatch'))}</p>`}</div>`;
 }
@@ -213,16 +216,16 @@ function homeHTML() {
   const pill = (k, lab) => `<button class="pill" data-fl="${k}" aria-pressed="${!!S.fl[k]}">${esc(t(lab))}</button>`;
   const lo = S.langSet && !regionLangs().includes(S.lang) && !S.langNo[S.region] ? regionLang() : null;
   return `<section class="hero"><h1>${esc(t('heroTitle', { r: '\u0001' })).replace('\u0001', `<em>${esc(regionName())}</em>`)}</h1>
-   <div class="locline">${S.geo ? `<span class="dot live"></span> ${esc(t('liveOn'))}` : `<button class="pill" data-act="gps">📍 ${esc(t('useLive'))}</button>`}<span>${esc(t('showingIn', { region: regionName() }))} · ${esc(t('places', { n: S.vendors.length }))}</span></div></section>
+   <div class="locline">${S.geo ? `<span class="dot live"></span> ${esc(t('liveOn'))}` : `<button class="pill" data-act="gps">${ic('pin')} ${esc(t('useLive'))}</button>`}<span>${esc(t('showingIn', { region: regionName() }))} · ${esc(t('places', { n: S.vendors.length }))}</span></div></section>
   ${lo ? `<div class="banner" role="status"><span class="grow">${esc(t('langSuggest', { lang: LANGS[lo].n }))}</span><button class="btn sm" data-lang="${lo}" data-auto="1">${esc(t('langSwitch'))}</button><button class="lnk" data-act="dismiss-lang">${esc(t('langNo'))}</button></div>` : ''}
   <div class="addr"><div class="seg" role="group" aria-label="${esc(t('delivery'))}"><button data-fm="delivery" aria-pressed="${!pk}">${esc(t('delivery'))}</button><button data-fm="pickup" aria-pressed="${pk}">${esc(t('pickup'))}</button></div>
-   ${pk ? '' : `<input id="addr" data-f="address" value="${esc(i.address)}" placeholder="${esc(t('addressPh'))}" aria-label="${esc(t('address'))}" autocomplete="street-address"><button class="iconbtn" data-act="gps-addr" aria-label="${esc(t('useLocMap'))}">📍</button>`}</div>
+   ${pk ? '' : `<input id="addr" data-f="address" value="${esc(i.address)}" placeholder="${esc(t('addressPh'))}" aria-label="${esc(t('address'))}" autocomplete="street-address"><button class="iconbtn" data-act="gps-addr" aria-label="${esc(t('useLocMap'))}">${ic('pin')}</button>`}</div>
   ${rn && rn.cities.length > 1 ? `<div class="scroll" role="group" aria-label="${esc(t('regionLbl'))}"><button class="pill" data-city="" aria-pressed="${!S.city}">${esc(t('allCities', { region: regionName() }))}</button>${rn.cities.map(c => `<button class="pill" data-city="${esc(c.n)}" aria-pressed="${S.city === c.n}">${esc(c.n)}</button>`).join('')}</div>` : ''}
   <div class="tabs" role="group">${TABS.map(([k, lab]) => `<button class="tab" data-tab="${k}" aria-pressed="${S.tab === k}">${esc(t(lab))}</button>`).join('')}<button class="tab" data-view="orders" style="margin-inline-start:auto">${esc(t('orders'))}${S.orders.length ? ' (' + S.orders.length + ')' : ''}</button></div>
   <input id="search" type="search" placeholder="${esc(t('search'))}" value="${esc(S.q)}" aria-label="${esc(t('search'))}">
-  <div class="promo"><div><b>${esc(t('promoTitle'))}</b><br>${esc(t('promoSub'))}</div><span>🎉</span></div>
+  <div class="promo"><div><b>${esc(t('promoTitle'))}</b><br>${esc(t('promoSub'))}</div><span class="gifti">${ic('gift')}</span></div>
   ${S.grp ? `<button class="pill" data-v="${S.grp.vid}">${esc(t('grpBack', { code: S.grp.code }))}</button>` : `<div class="addr"><input id="gcode" placeholder="${esc(t('grpCode'))}" maxlength="4" style="max-width:230px;text-transform:uppercase" aria-label="${esc(t('grpCode'))}"><button class="pill" data-join="1">${esc(t('grpJoin'))}</button></div>`}
-  <div class="cz"><button class="cc" data-cz="" aria-pressed="${!S.cz}"><span>🛍️</span>${esc(t('allCats'))}</button>${cz.map(([c, e]) => `<button class="cc" data-cz="${esc(c)}" aria-pressed="${S.cz === c}"><span>${e}</span>${esc(c)}</button>`).join('')}</div>
+  <div class="cz"><button class="cc" data-cz="" aria-pressed="${!S.cz}"><span>${ic('bag')}</span>${esc(t('allCats'))}</button>${cz.map(([c, e]) => `<button class="cc" data-cz="${esc(c)}" aria-pressed="${S.cz === c}"><span>${ic(iconFor(e))}</span>${esc(c)}</button>`).join('')}</div>
   <div class="toolbar"><div class="scroll" style="flex:1">${pill('fast', 'fFast')}${pill('top', 'fTop')}${pill('cheap', 'fCheap')}${pill('fav', 'fFav')}${pill('near', 'fNear')}</div>
    <select id="sort" aria-label="${esc(t('sortRec'))}">${[['rec', 'sortRec'], ['near', 'sortNear'], ['fast', 'sortFast'], ['top', 'sortTop'], ['fee', 'sortFee']].map(([k, lab]) => `<option value="${k}" ${S.sort === k ? 'selected' : ''}>${esc(t(lab))}</option>`).join('')}</select>
    ${window.L ? `<div class="seg"><button data-vm="list" aria-pressed="${S.vmode === 'list'}">${esc(t('viewList'))}</button><button data-vm="map" aria-pressed="${S.vmode === 'map'}">${esc(t('viewMap'))}</button></div>` : ''}</div>
@@ -235,11 +238,11 @@ function initVMap() {
   const el = $('#vmap'); if (!el || !window.L) return; if (VMARK) { VMARK.remove(); VMARK = null; }
   const { list } = listData(), rn = regionObj(S.region), c = rn ? rn.cities.find(x => x.n === S.city) || rn.cities[0] : { lat: 0, lng: 0 };
   VMARK = L.map(el).setView([c.lat, c.lng], 11); L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(VMARK);
-  const pts = list.map(v => { L.marker([v.lat, v.lng], { icon: pinIcon(v.emoji, '') }).addTo(VMARK).bindTooltip(v.name + ' · ' + v.cat).on('click', () => openVendor(v.id)); return [v.lat, v.lng]; });
-  if (S.geo) { L.marker([S.geo.lat, S.geo.lng], { icon: pinIcon('📍', 'me') }).addTo(VMARK).bindTooltip(t('mapYou')); pts.push([S.geo.lat, S.geo.lng]); }
+  const pts = list.map(v => { L.marker([v.lat, v.lng], { icon: pinIcon(iconFor(v.emoji), '') }).addTo(VMARK).bindTooltip(v.name + ' · ' + v.cat).on('click', () => openVendor(v.id)); return [v.lat, v.lng]; });
+  if (S.geo) { L.marker([S.geo.lat, S.geo.lng], { icon: pinIcon('pin', 'me') }).addTo(VMARK).bindTooltip(t('mapYou')); pts.push([S.geo.lat, S.geo.lng]); }
   if (pts.length > 1) VMARK.fitBounds(pts, { padding: [30, 30], maxZoom: 14 }); else if (pts.length) VMARK.setView(pts[0], 13);
 }
-const pinIcon = (emoji, cls) => L.divIcon({ className: 'pinwrap', html: `<div class="pin ${cls}">${emoji}</div>`, iconSize: [38, 38], iconAnchor: [19, 19] });
+const pinIcon = (name, cls) => L.divIcon({ className: 'pinwrap', html: `<div class="pin ${cls}">${cls === 'rider' ? '<i class="hd"></i>' : ''}${ic(name)}</div>`, iconSize: [38, 38], iconAnchor: [19, 19] });
 
 // ───────────────────────── menu, options, cart
 const DIET = [['veg', 'dietVeg'], ['vegan', 'dietVegan'], ['gf', 'dietGf'], ['halal', 'dietHalal']], TAGI = { veg: '🌱', vegan: '🌿', gf: 'GF', halal: '☪', spicy: '🌶', nuts: '🥜' };
@@ -258,18 +261,18 @@ const FLOWL = ['placed', 'accepted', 'preparing', 'ready', 'onway', 'delivered']
 function menuHTML() {
   const v = S.v, cats = [...new Set(v.items.filter(dietOk).map(i => i.c))], d = dist(v), pk = S.info.mode === 'pickup';
   CUR = v.cur;
-  return `<button class="back" data-view="home">← ${esc(t('back'))}</button>${grpBanner(v)}<div class="vbanner s${hs(v.id) % 6}">${ph(v.img)}${v.emoji}</div><h1>${esc(v.name)}</h1>
+  return `<button class="back" data-view="home">← ${esc(t('back'))}</button>${grpBanner(v)}${v.open === false ? `<div class="banner" role="status">${ic('warn')} <span class="grow">${esc(t('closedMsg'))}${v.hours ? ' (' + esc(v.hours) + ')' : ''}</span></div>` : ''}<div class="vbanner s${hs(v.id) % 6}">${pic(v.emoji)}${ph(v.img)}</div><h1>${esc(v.name)}</h1>
   <p class="meta"><span class="star">${v.rating.toFixed(1)} ★</span> (${v.reviews}+) · ${esc(v.cat)} · ${esc(v.city)} · ${esc(t('minShort', { n: v.eta }))} · ${pk ? esc(t('pickupTag')) : esc(t('feeDelivery', { fee: fmt(v.fee) }))}${d !== null ? ' · ' + distLabel(d) : ''}</p>
   <p class="meta">${esc(t('deliversWithin', { n: v.radius }))}${d !== null && d > v.radius ? ' · ⚠ ' + esc(t('outRange')) : ''}</p>
   ${v.type === 'food' || v.type === 'grocery' ? `<div class="scroll">${DIET.map(([k, lab]) => `<button class="pill" data-diet="${k}" aria-pressed="${S.diet.includes(k)}">${esc(t(lab))}</button>`).join('')}</div>` : ''}
   ${cats.map(c => `<h2 class="cat">${esc(c)}</h2>` + v.items.filter(i => i.c === c && dietOk(i)).map(i => {
     const q = S.cart.vid === v.id ? Object.entries(S.cart.q).filter(([k]) => k === i.id || k.startsWith(i.id + '|')).reduce((a, [, n]) => a + n, 0) : 0;
-    return `<div class="item"><div class="thumb">${ph(i.img)}${v.emoji}</div><div><h3>${esc(i.n)} ${(i.tags || []).map(x => TAGI[x] || '').join(' ')}${i.alc ? ' 🔞' : ''}</h3><p class="meta">${esc(i.d)}</p><span class="price">${fmt(i.p)}</span></div>
-    ${i.opts && i.opts.length ? `<button class="add" data-open="${i.id}">${q ? esc(t('inCartAdd', { n: q })) : esc(t('add'))}</button>` : q ? `<span class="qty"><button data-d="-1" data-i="${i.id}" aria-label="${esc(t('removeOne'))}">−</button>${q}<button data-d="1" data-i="${i.id}" aria-label="${esc(t('addOne'))}">+</button></span>` : `<button class="add" data-d="1" data-i="${i.id}">${esc(t('add'))}</button>`}</div>`;
+    return `<div class="item ${i.out ? 'out' : ''}"><div class="thumb">${pic(v.emoji, 1)}${ph(i.img)}</div><div><h3>${esc(i.n)} ${(i.tags || []).map(x => TAGI[x] || '').join(' ')}${i.alc ? ' <span class="tag">18+</span>' : ''}</h3><p class="meta">${esc(i.d)}</p><span class="price">${fmt(i.p)}</span></div>
+    ${i.out ? `<span class="tag">${esc(t('soldOut'))}</span>` : i.opts && i.opts.length ? `<button class="add" data-open="${i.id}">${q ? esc(t('inCartAdd', { n: q })) : esc(t('add'))}</button>` : q ? `<span class="qty"><button data-d="-1" data-i="${i.id}" aria-label="${esc(t('removeOne'))}">−</button>${q}<button data-d="1" data-i="${i.id}" aria-label="${esc(t('addOne'))}">+</button></span>` : `<button class="add" data-d="1" data-i="${i.id}">${esc(t('add'))}</button>`}</div>`;
   }).join('')).join('')}`;
 }
 function grpBanner(v) {
-  return S.grp && S.grp.vid === v.id ? `<div class="order">👥 ${esc(t('grpTitle'))} <b>${S.grp.code}</b> · ${S.grp.host ? esc(t('grpHost')) : esc(t('grpGuest', { who: S.grp.who }))} <button class="lnk" data-grp="leave">${esc(t('grpLeave'))}</button></div>` : (S.grp ? '' : `<button class="lnk" data-grp="start">${esc(t('grpStart'))}</button>`);
+  return S.grp && S.grp.vid === v.id ? `<div class="order">${ic('users')} ${esc(t('grpTitle'))} <b>${S.grp.code}</b> · ${S.grp.host ? esc(t('grpHost')) : esc(t('grpGuest', { who: S.grp.who }))} <button class="lnk" data-grp="leave">${esc(t('grpLeave'))}</button></div>` : (S.grp ? '' : `<button class="lnk" data-grp="start">${esc(t('grpStart'))}</button>`);
 }
 function snapshotVendor() { if (S.v) { S.vinfo = S.v; LS.set('if_vi', { id: S.v.id, name: S.v.name, fee: S.v.fee, eta: S.v.eta, cur: S.v.cur, country: S.v.country, type: S.v.type, region: S.v.region, radius: S.v.radius, lat: S.v.lat, lng: S.v.lng, city: S.v.city, emoji: S.v.emoji }); } }
 function ensureCartVendor() {
@@ -301,9 +304,10 @@ const gpsFor = v => S.geo && v && km(S.geo.lat, S.geo.lng, v.lat, v.lng) <= (v.r
 const calc = () => {
   const v = getV(cvid()), u = (v && country(v.country).u) || 1000, s = sub(), pk = S.info.mode === 'pickup', f = v && !pk && !(S.lp && S.lp.tier === 'Gold') ? v.fee : 0, svc = s >= FREE * u ? 0 : Math.round(s * SVC), st = Math.max(1, Math.round(u / 2));
   const tip = pk ? 0 : Math.min(s, Math.round(s * (S.info.tipPct ?? 10) / 100 / st) * st), code = (S.info.promo || '').toUpperCase().trim(), disc = Math.round(s * (code === 'DROP10' ? .1 : 0)), rd = S.info.redeem && S.lp && S.lp.pts >= 100 && s >= 5 * u ? 5 * u : 0;
-  if (v) CUR = v.cur; return { v, s, u, pk, f, svc, tip, disc, rd, total: s + f + svc + tip - disc - rd };
+  if (v) CUR = v.cur; const cc = (v && country(v.country)) || {}, base = Math.max(0, s - disc + f + svc), tx = cc.tax ? (cc.taxIncl ? Math.round(base - base / (1 + cc.tax)) : Math.round(base * cc.tax)) : 0;
+  return { v, s, u, pk, f, svc, tip, disc, rd, tax: tx, taxIncl: !!cc.taxIncl, taxRate: Math.round((cc.tax || 0) * 1000) / 10, total: s + f + svc + tip - disc - rd + (cc.taxIncl ? 0 : tx) };
 };
-function updFab() { const fc = $('#fcart'), n = allLines().reduce((a, l) => a + l.q, 0); fc.hidden = !(S.mode === 'customer' && n); if (n) fc.textContent = '🛍 ' + t('cart') + ' · ' + n + ' · ' + fmt(calc().total); const c = $('#count'); if (c) c.textContent = cnt(); }
+function updFab() { const fc = $('#fcart'), n = allLines().reduce((a, l) => a + l.q, 0); fc.hidden = !(S.mode === 'customer' && n); if (n) fc.innerHTML = ic('bag') + ' ' + esc(t('cart')) + ' · ' + n + ' · ' + esc(fmt(calc().total)); const c = $('#count'); if (c) c.textContent = cnt(); }
 function cartUI(open) {
   const L = allLines(), c = calc(), i = S.info, v = c.v, tp = i.tipPct ?? 10; if (v && !payMethods().includes(i.pay)) i.pay = payMethods()[0];
   const g = v && gpsFor(v), outside = v && S.geo && !g && !c.pk;
@@ -311,17 +315,17 @@ function cartUI(open) {
     `<div class="seg" role="group" style="margin:6px 0 10px"><button data-fm="delivery" aria-pressed="${!c.pk}">${esc(t('delivery'))}</button><button data-fm="pickup" aria-pressed="${c.pk}">${esc(t('pickup'))}</button></div>
     <div class="meta" style="margin-bottom:6px"><b>${esc(v.name)}</b> · ${esc(v.city || '')} · ${c.pk ? esc(t('readyIn', { n: Math.max(10, v.eta - 10) })) : esc(t('arrives', { n: v.eta }))}</div>
     ${L.map(l => `<div><div class="row"><span>${l.q} × ${esc(l.n)}${l.ro ? ' · ' + esc(l.who) : ''}</span><span>${fmt(l.p * l.q)}</span></div>${l.ro ? '' : `<div class="row" style="padding:0 0 6px"><input class="ln" style="flex:1" data-ln="${l.id}" value="${esc(S.cart.notes?.[l.id] || '')}" placeholder="${esc(t('noteItem'))}" aria-label="${esc(t('noteItem'))}"><span class="qty"><button data-cd="${l.id}" data-d2="-1" aria-label="${esc(t('removeOne'))}">−</button><button data-cd="${l.id}" data-d2="1" aria-label="${esc(t('addOne'))}">+</button></span></div>`}</div>`).join('')}
-    <div class="row meta"><span>${esc(t('subtotal'))}</span><span>${fmt(c.s)}</span></div>${c.pk ? '' : `<div class="row meta"><span>${esc(t('deliveryFee'))}</span><span>${fmt(c.f)}</span></div>`}<div class="row meta"><span>${esc(t('serviceFee'))}</span><span>${c.svc ? fmt(c.svc) : esc(t('free'))}</span></div>${c.s && c.s < FREE * c.u ? `<p class="meta" style="margin:0 0 4px">${esc(t('addMoreFree', { amt: fmt(FREE * c.u - c.s) }))}</p>` : ''}${c.pk ? '' : `<div class="row meta"><span>${esc(t('riderTip'))}</span><span>${fmt(c.tip)}</span></div>`}${c.disc ? `<div class="row meta"><span>${esc(t('promo'))}</span><span>−${fmt(c.disc)}</span></div>` : ''}${c.rd ? `<div class="row meta"><span>${esc(t('points'))}</span><span>−${fmt(c.rd)}</span></div>` : ''}<div class="row tot"><span>${esc(t('total'))}</span><span>${fmt(c.total)}</span></div>
+    <div class="row meta"><span>${esc(t('subtotal'))}</span><span>${fmt(c.s)}</span></div>${c.pk ? '' : `<div class="row meta"><span>${esc(t('deliveryFee'))}</span><span>${fmt(c.f)}</span></div>`}<div class="row meta"><span>${esc(t('serviceFee'))}</span><span>${c.svc ? fmt(c.svc) : esc(t('free'))}</span></div>${c.s && c.s < FREE * c.u ? `<p class="meta" style="margin:0 0 4px">${esc(t('addMoreFree', { amt: fmt(FREE * c.u - c.s) }))}</p>` : ''}${c.pk ? '' : `<div class="row meta"><span>${esc(t('riderTip'))}</span><span>${fmt(c.tip)}</span></div>`}${c.disc ? `<div class="row meta"><span>${esc(t('promo'))}</span><span>−${fmt(c.disc)}</span></div>` : ''}${c.tax ? `<div class="row meta"><span>${esc(c.taxIncl ? t('taxIncl', { r: c.taxRate, amt: fmt(c.tax) }) : t('tax', { r: c.taxRate }))}</span><span>${c.taxIncl ? '' : fmt(c.tax)}</span></div>` : ''}${c.rd ? `<div class="row meta"><span>${esc(t('points'))}</span><span>−${fmt(c.rd)}</span></div>` : ''}<div class="row tot"><span>${esc(t('total'))}</span><span>${fmt(c.total)}</span></div>
     ${c.pk ? '' : `<div class="form"><label>${esc(t('tipRider'))}</label><div class="pay">${[0, 10, 15, 20].map(p => `<button class="chip" data-tp="${p}" aria-pressed="${tp === p}">${p ? p + '%' : esc(t('none'))}</button>`).join('')}</div></div>`}
     <div class="form"><label for="f-name">${esc(t('name'))}</label><input id="f-name" data-f="name" value="${esc(i.name)}" autocomplete="name"><label for="f-phone">${esc(t('phone'))}</label><input id="f-phone" data-f="phone" value="${esc(i.phone)}" inputmode="tel" placeholder="${esc(t('phonePh'))}" autocomplete="tel">
-    ${c.pk ? '' : `<label for="f-address">${esc(t('address'))}</label><input id="f-address" data-f="address" value="${esc(i.address)}" placeholder="${esc(t('addressFull'))}"><button class="lnk" data-act="gps-addr" type="button" style="text-align:start">📍 ${esc(S.geo ? t('locSaved') : t('useLocMap'))}</button>${outside ? `<p class="meta" role="status">⚠ ${esc(t('rangeWarn'))}</p>` : ''}<label for="f-note">${esc(t('noteRider'))}</label><input id="f-note" data-f="note" value="${esc(i.note)}">`}
+    ${c.pk ? '' : `<label for="f-address">${esc(t('address'))}</label><input id="f-address" data-f="address" value="${esc(i.address)}" placeholder="${esc(t('addressFull'))}"><button class="lnk" data-act="gps-addr" type="button" style="text-align:start">${ic('pin')} ${esc(S.geo ? t('locSaved') : t('useLocMap'))}</button>${outside ? `<p class="meta" role="status">⚠ ${esc(t('rangeWarn'))}</p>` : ''}<label for="f-note">${esc(t('noteRider'))}</label><input id="f-note" data-f="note" value="${esc(i.note)}">`}
     ${S.lp ? `<div class="order" style="margin-top:10px">${esc(t('ptsLine', { n: S.lp.pts, tier: S.lp.tier }))}${S.lp.tier === 'Gold' ? ' · ' + esc(t('goldFree')) : ''}${S.lp.pts >= 100 && c.s >= 5 * c.u ? ` <button class="chip" style="margin-top:8px" data-redeem="1" aria-pressed="${!!i.redeem}">${esc(t('usePts', { amt: fmt(5 * c.u) }))}</button>` : ''}</div>` : ''}
     <label for="f-later">${esc(t('when'))}</label><select id="f-later" data-f="later">${[[0, 'asap'], [60, 'in1h'], [120, 'in2h'], [240, 'in4h'], [1440, 'tomorrow']].map(([m, k]) => `<option value="${m}" ${+i.later === m ? 'selected' : ''}>${esc(t(k))}</option>`).join('')}</select>
     ${v.type === 'grocery' ? `<label for="f-sub">${esc(t('oos'))}</label><select id="f-sub" data-f="subPref">${[['refund', 'oosRefund'], ['substitute', 'oosSub'], ['call', 'oosCall']].map(([k, lab]) => `<option value="${k}" ${(i.subPref || 'refund') === k ? 'selected' : ''}>${esc(t(lab))}</option>`).join('')}</select>` : ''}
     <label for="f-promo">${esc(t('promoCode'))}</label><input id="f-promo" data-f="promo" value="${esc(i.promo)}" placeholder="DROP10"><label>${esc(t('payment'))}</label><div class="pay">${payMethods().map(p => `<button class="chip" data-pay="${p}" aria-pressed="${i.pay === p}">${esc(payLabel(p))}</button>`).join('')}</div></div>
     ${i.pay === 'Mobile money' ? `<div class="form"><label for="f-momo">${esc(t('momoNum'))}</label><input id="f-momo" data-f="momo" value="${esc(i.momo || '')}" inputmode="tel" placeholder="${esc(t('momoPh'))}"></div>` : i.pay === 'Card' ? `<p class="meta">${esc(t('cardNote'))}</p>` : ''}
     ${needAge() ? `<label class="order" style="display:flex;gap:10px;align-items:center;margin-top:10px"><input type="checkbox" data-f="ageOk" ${i.ageOk ? 'checked' : ''}> ${esc(t('ageOk', { age: country(v.country).age }))}</label>` : ''}
-    ${S.grp && !S.grp.host ? `<p class="meta">${esc(t('grpShared'))}</p>` : `<button class="go" id="place">${esc(t('place', { total: fmt(c.total) }))}</button>`}` : `<p class="meta">${esc(t('cartEmpty'))}</p>`);
+    ${S.grp && !S.grp.host ? `<p class="meta">${esc(t('grpShared'))}</p>` : `${v.open === false && !+i.later ? `<p class="aerr">${esc(t('closedMsg'))}</p>` : ''}<button class="go" id="place" ${v.open === false && !+i.later ? 'disabled' : ''}>${esc(t('place', { total: fmt(c.total) }))}</button>`}` : `<p class="meta">${esc(t('cartEmpty'))}</p>`);
   if (open) { $('#sheet').classList.add('on'); $('#scrim').classList.add('on'); }
 }
 async function loadLp() { if (!/^[+\d][\d\s-]{7,}$/.test(S.info.phone || '')) return; try { S.lp = await api('/loyalty/' + encodeURIComponent(S.info.phone) + '?c=' + ((getV(cvid()) || {}).country || S.cc)); cartUI(false); updFab(); } catch { } }
@@ -352,13 +356,24 @@ function etaHTML(o, i, n) {
   const v = getV(o.vendorId), when = new Date((o.sched || o.at) + (v ? v.eta : 30) * 60000).toLocaleTimeString(LANGS[S.lang].tag, { hour: 'numeric', minute: '2-digit' });
   return `<div class="meta">${o.sched ? esc(t('scheduled')) + ' · ' : ''}${o.mode === 'pickup' ? esc(t('readyAround')) : esc(t('estArrival'))}</div><div class="etab">${when}</div><div class="bar"><i style="width:${Math.max(6, Math.round(i / (n - 1) * 100))}%"></i></div>`;
 }
+
+let ROUTE = {}; S.follow = true;
+// Distance, ETA and speed of the rider. The ETA comes from the real road route when we have one, else from the straight line.
+function riderStats(o) {
+  const c = custPoint(o); if (!o.loc || !c) return {}; const rt = ROUTE.id === o.id && ROUTE.mins;
+  const d = rt ? ROUTE.km : km(o.loc.lat, o.loc.lng, c.lat, c.lng);
+  return { d, mins: rt ? ROUTE.mins : Math.max(1, Math.round(d / 24 * 60)), kmh: o.loc.sp > .5 ? Math.round(o.loc.sp * 3.6) : null, stale: Date.now() - o.loc.t > 60000 };
+}
+const freshLine = o => { const r = riderStats(o); return (r.stale ? ic('warn') + ' ' + esc(t('signalLost', { ago: ago(o.loc.t) })) : esc(t('updated', { ago: ago(o.loc.t) }))) + (r.kmh ? ' · ' + r.kmh + ' km/h' : ''); };
 function liveHTML(o) {
   if (o.mode === 'pickup' || o.status === 'delivered' || o.status === 'rejected') return '';
-  if (o.status !== 'onway') return `<p class="meta" style="margin:10px 0">🛵 ${esc(t('riderWait'))}</p>`;
-  const c = custPoint(o); let line = '';
-  if (o.loc && c) { const d = km(o.loc.lat, o.loc.lng, c.lat, c.lng), mins = Math.max(1, Math.round(d / 24 * 60)); line = d < 0.15 ? `<b>${esc(t('riderArriving'))}</b>` : `<b>${esc(t('riderAway', { km: distLabel(d), n: mins }))}</b>`; }
-  return `<div class="live-card" role="status"><span class="big">🛵</span><div>${line || '<b>' + esc(t('sOnway')) + '</b>'}${o.rider ? `<span class="meta">${esc(t('riderLbl'))}: ${esc(o.rider)}</span>` : ''}</div></div>`;
+  if (o.status !== 'onway') return `<p class="meta" style="margin:10px 0">${ic('bike')} ${esc(t('riderWait'))}</p>`;
+  const r = riderStats(o); let line = '';
+  if (r.d !== undefined) line = r.d < 0.15 ? `<b>${esc(t('riderArriving'))}</b>` : `<b>${esc(t('riderAway', { km: distLabel(r.d), n: r.mins }))}</b>`;
+  return `<div class="live-card" role="status"><span class="big">${ic('bike')}</span><div>${line || '<b>' + esc(t('sOnway')) + '</b>'}${o.rider ? `<span class="meta">${esc(t('riderLbl'))}: ${esc(o.rider)}</span>` : ''}${o.loc ? `<span class="meta" id="lastup">${freshLine(o)}</span>` : ''}</div></div>`;
 }
+setInterval(() => { const e = $('#lastup'); if (e && S.track && S.track.loc) e.innerHTML = freshLine(S.track); }, 5000);
+const bearing = (p, q) => { const y = Math.sin(rad(q[1] - p[1])) * Math.cos(rad(q[0])), x = Math.cos(rad(p[0])) * Math.sin(rad(q[0])) - Math.sin(rad(p[0])) * Math.cos(rad(q[0])) * Math.cos(rad(q[1] - p[1])); return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360; };
 function infoHTML(o) {
   CUR = o.cur || CUR;
   const FL = o.mode === 'pickup' ? FLOWL.filter(s => s !== 'onway') : FLOWL, i = FL.indexOf(o.status), ok = o.payStatus === 'paid' || o.payStatus === 'cash';
@@ -372,26 +387,45 @@ function infoHTML(o) {
 }
 function trackHTML() {
   const o = S.track; if (!o) return `<p class="meta">${esc(t('loading'))}</p>`; CUR = o.cur || CUR;
-  return `<button class="back" data-view="orders">← ${esc(t('myOrders'))}</button><div id="tinfo">${infoHTML(o)}</div><div id="map" class="map" role="img" aria-label="${esc(t('mapLabel'))}"></div>
-  <div class="order">${o.lines.map(l => `<div class="row"><span>${l.q} × ${esc(l.n)}</span><span>${fmt(l.p * l.q)}</span></div>`).join('')}${o.mode === 'pickup' ? '' : `<div class="row meta"><span>${esc(t('deliveryFee'))}</span><span>${fmt(o.fee)}</span></div>`}<div class="row meta"><span>${esc(t('serviceFee'))}</span><span>${fmt(o.service || 0)}</span></div>${o.tip ? `<div class="row meta"><span>${esc(t('riderTip'))}</span><span>${fmt(o.tip)}</span></div>` : ''}${o.discount ? `<div class="row meta"><span>${esc(t('promo'))}</span><span>−${fmt(o.discount)}</span></div>` : ''}${o.redeemed ? `<div class="row meta"><span>${esc(t('points'))}</span><span>−${fmt(o.redeemed)}</span></div>` : ''}<div class="row tot"><span>${esc(t('total'))}</span><span>${fmt(o.total)}</span></div></div><button class="go" data-view="home">${esc(t('orderMore'))}</button>`;
+  return `<button class="back" data-view="orders">← ${esc(t('myOrders'))}</button><div id="tinfo">${infoHTML(o)}</div><div id="map" class="map" role="img" aria-label="${esc(t('mapLabel'))}"></div><div class="maptools"><button class="pill" data-act="follow" aria-pressed="${S.follow}">${ic('bike')} ${esc(t('follow'))}</button><button class="pill" data-act="fit">${ic('map')} ${esc(t('fitAll'))}</button></div>
+  <div class="order">${o.lines.map(l => `<div class="row"><span>${l.q} × ${esc(l.n)}</span><span>${fmt(l.p * l.q)}</span></div>`).join('')}${o.mode === 'pickup' ? '' : `<div class="row meta"><span>${esc(t('deliveryFee'))}</span><span>${fmt(o.fee)}</span></div>`}<div class="row meta"><span>${esc(t('serviceFee'))}</span><span>${fmt(o.service || 0)}</span></div>${o.tip ? `<div class="row meta"><span>${esc(t('riderTip'))}</span><span>${fmt(o.tip)}</span></div>` : ''}${o.discount ? `<div class="row meta"><span>${esc(t('promo'))}</span><span>−${fmt(o.discount)}</span></div>` : ''}${o.tax ? `<div class="row meta"><span>${esc(o.taxIncl ? t('taxIncl', { r: Math.round(o.taxRate * 1000) / 10, amt: fmt(o.tax) }) : t('tax', { r: Math.round(o.taxRate * 1000) / 10 }))}</span><span>${o.taxIncl ? '' : fmt(o.tax)}</span></div>` : ''}${o.redeemed ? `<div class="row meta"><span>${esc(t('points'))}</span><span>−${fmt(o.redeemed)}</span></div>` : ''}<div class="row tot"><span>${esc(t('total'))}</span><span>${fmt(o.total)}</span></div></div><button class="go" data-view="home">${esc(t('orderMore'))}</button>`;
 }
+function syncTools() { const b = document.querySelector('[data-act=follow]'); if (b) b.setAttribute('aria-pressed', S.follow); }
 function initMap() {
-  const el = $('#map'); if (!el) return; if (!window.L || !S.track) { el.style.display = 'none'; return; }
+  const el = $('#map'); if (!el) return; if (!window.L || !S.track) { el.style.display = 'none'; const mt = $('.maptools'); if (mt) mt.style.display = 'none'; return; }
   const o = S.track; MAP = L.map(el).setView([o.vlat, o.vlng], 13);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(MAP); MK = {};
-  MK.trail = L.polyline([], { color: '#D93A12', weight: 4, opacity: .8 }).addTo(MAP); MK.leg = L.polyline([], { color: '#0B7A55', weight: 3, dashArray: '6 8' }).addTo(MAP); updateMap(true);
+  MK.route = L.polyline([], { color: '#D93A12', weight: 6, opacity: .85, lineCap: 'round' }).addTo(MAP);
+  MK.trail = L.polyline([], { color: '#1D1511', weight: 3, opacity: .45, dashArray: '2 7' }).addTo(MAP); MK.leg = L.polyline([], { color: '#0B7A55', weight: 3, dashArray: '6 8' }).addTo(MAP);
+  MAP.on('dragstart', () => { if (S.follow) { S.follow = false; syncTools(); } }); updateMap(true);
 }
 function glide(m, to, ms = 1200) {
   const from = m.getLatLng(); cancelAnimationFrame(m._raf); if (Math.abs(from.lat - to[0]) + Math.abs(from.lng - to[1]) < 1e-6) return; const t0 = performance.now();
   const step = now => { const k = Math.min(1, (now - t0) / ms), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; m.setLatLng([from.lat + (to[0] - from.lat) * e, from.lng + (to[1] - from.lng) * e]); if (k < 1) m._raf = requestAnimationFrame(step); };
   m._raf = requestAnimationFrame(step);
 }
+// Driving route from the rider to the customer (OpenStreetMap's public OSRM demo server; falls back to a straight dashed line).
+async function fetchRoute(o) {
+  const c = custPoint(o); if (!o.loc || !c || o.status !== 'onway') return;
+  if (ROUTE.id === o.id && (Date.now() - ROUTE.at < 15000 || km(ROUTE.from[0], ROUTE.from[1], o.loc.lat, o.loc.lng) < .15)) return;
+  const keep = ROUTE.id === o.id ? ROUTE : {}; ROUTE = { ...keep, id: o.id, at: Date.now(), from: [o.loc.lat, o.loc.lng] };
+  try {
+    const j = await (await fetch(`https://router.project-osrm.org/route/v1/driving/${o.loc.lng},${o.loc.lat};${c.lng},${c.lat}?overview=full&geometries=geojson`)).json(), r = j.routes && j.routes[0]; if (!r) return;
+    ROUTE = { id: o.id, at: Date.now(), from: [o.loc.lat, o.loc.lng], pts: r.geometry.coordinates.map(([x, y]) => [y, x]), mins: Math.max(1, Math.round(r.duration / 60)), km: r.distance / 1000 };
+    if (MK.route && S.track && S.track.id === o.id) MK.route.setLatLngs(ROUTE.pts); const el = $('#tinfo'); if (el && S.view === 'track' && S.track) el.innerHTML = infoHTML(S.track);
+  } catch { }
+}
 function updateMap(fit) {
   const o = S.track; if (!MAP || !o) return; const pts = [];
-  const put = (k, ll, label, emoji, cls) => { if (!ll) return; pts.push(ll); if (MK[k]) glide(MK[k], ll); else MK[k] = L.marker(ll, { icon: pinIcon(emoji, cls) }).addTo(MAP).bindTooltip(label); };
-  put('v', [o.vlat, o.vlng], o.vendor, '🏪', ''); const c = custPoint(o); put('c', c && [c.lat, c.lng], t('mapYou'), '📍', 'me'); put('r', o.loc && [o.loc.lat, o.loc.lng], t('mapRider'), '🛵', 'rider');
-  if (MK.trail) MK.trail.setLatLngs(o.trail || []); if (MK.leg) MK.leg.setLatLngs(o.loc && c ? [[o.loc.lat, o.loc.lng], [c.lat, c.lng]] : []);
-  if (fit && pts.length > 1) MAP.fitBounds(pts, { padding: [40, 40], maxZoom: 16 });
+  const put = (k, ll, label, name, cls) => { if (!ll) return; pts.push(ll); if (MK[k]) glide(MK[k], ll); else MK[k] = L.marker(ll, { icon: pinIcon(name, cls) }).addTo(MAP).bindTooltip(label); };
+  put('v', [o.vlat, o.vlng], o.vendor, 'store', ''); const c = custPoint(o); put('c', c && [c.lat, c.lng], t('mapYou'), 'pin', 'me'); put('r', o.loc && [o.loc.lat, o.loc.lng], t('mapRider'), 'bike', 'rider');
+  if (MK.trail) MK.trail.setLatLngs(o.trail || []);
+  const hasRoute = ROUTE.id === o.id && ROUTE.pts && o.status === 'onway'; if (MK.route) MK.route.setLatLngs(hasRoute ? ROUTE.pts : []);
+  if (MK.leg) MK.leg.setLatLngs(!hasRoute && o.loc && c ? [[o.loc.lat, o.loc.lng], [c.lat, c.lng]] : []);
+  if (MK.r) { const tr = o.trail || [], hd = o.loc && o.loc.hd != null ? o.loc.hd : tr.length > 1 ? bearing(tr[tr.length - 2], tr[tr.length - 1]) : null, e = MK.r.getElement(), ar = e && e.querySelector('.hd'); if (ar && hd !== null) { ar.style.transform = `rotate(${hd}deg)`; ar.style.opacity = 1; } }
+  const first = o.loc && !MK.seen; if (first) MK.seen = 1;
+  if ((fit || first) && pts.length > 1) MAP.fitBounds(pts, { padding: [40, 40], maxZoom: 16 }); else if (S.follow && o.loc && o.status === 'onway') MAP.panTo([o.loc.lat, o.loc.lng], { animate: true, duration: 1 });
+  fetchRoute(o);
 }
 function updateTrack() {
   if (S.view !== 'track' || S.mode !== 'customer' || !S.track) return; const el = $('#tinfo'); if (el && !(document.activeElement && el.contains(document.activeElement) && document.activeElement.type === 'text')) el.innerHTML = infoHTML(S.track); updateMap(false);
@@ -426,14 +460,24 @@ const NEXT = { placed: [['accepted', 'Accept'], ['rejected', 'Decline', 'no']], 
 function vendorUI() {
   if (!S.vendors.some(v => v.id === S.vauth.id) && S.vendors[0]) S.vauth = { id: S.vendors[0].id, pin: '' };
   $('#main').innerHTML = `<h1>Kitchen / Store</h1><p class="meta">Showing places in ${esc(regionName())}. Change region at the top to find others. Demo PINs in Kampala: Mama Rolex 1111, Lake Victoria Grill 2222, Napoli Corner 3333, FreshMart 4444, Green Basket 5555, Corner Shop 6666, Wine Cellar 7777, Chill Drinks 7778, HomePlus 7779. Every other place: see its PIN in Admin.</p>
-  <div class="form"><label for="vid">Place</label><select id="vid">${S.vendors.map(v => `<option value="${v.id}" ${v.id === S.vauth.id ? 'selected' : ''}>${esc(v.name)} (${esc(v.city)})</option>`).join('')}</select><label for="vpin">PIN</label><input id="vpin" type="password" inputmode="numeric" value="${esc(S.vauth.pin)}"></div><div id="vlist" style="margin-top:16px"></div>`;
-  listen(S.vauth.id ? '/api/stream/vendor/' + S.vauth.id : null, loadVendor); loadVendor();
+  <div class="form"><label for="vid">Place</label><select id="vid">${S.vendors.map(v => `<option value="${v.id}" ${v.id === S.vauth.id ? 'selected' : ''}>${esc(v.name)} (${esc(v.city)})</option>`).join('')}</select><label for="vpin">PIN</label><input id="vpin" type="password" inputmode="numeric" value="${esc(S.vauth.pin)}"></div><div id="vctl" style="margin-top:16px"></div><div id="vlist" style="margin-top:16px"></div>`;
+  loadVendorCtl(); listen(S.vauth.id ? '/api/stream/vendor/' + S.vauth.id : null, loadVendor); loadVendor();
 }
+async function loadVendorCtl() {
+  const el = $('#vctl'); if (!el || !S.vauth.id) return;
+  try {
+    const v = await api('/vendors/' + S.vauth.id);
+    el.innerHTML = `<div class="order"><div class="row"><b>${v.open ? 'Open for orders' : 'Closed'}</b><button class="act ${v.paused ? '' : 'no'}" data-vpause="${v.paused ? 0 : 1}">${v.paused ? 'Resume orders' : 'Pause orders'}</button></div>
+    <label class="meta" for="vhrs">Opening hours, local time (08:00-22:00). Empty = always open.</label><div class="pwrow"><input id="vhrs" value="${esc(v.hours)}" placeholder="08:00-22:00"><button class="act" data-vhours="1">Save</button></div>
+    <h3 class="cat" style="font-size:17px">Menu availability</h3>${v.items.map(i => `<div class="row"><span>${esc(i.n)}${i.out ? ' <span class="tag">Sold out</span>' : ''}</span><button class="act ${i.out ? '' : 'no'}" data-vout="${i.id}" data-o="${i.out ? 0 : 1}">${i.out ? 'Back in stock' : 'Mark sold out'}</button></div>`).join('')}</div>`;
+  } catch { }
+}
+const vcall = async (p, b) => { try { await api(p, { m: 'PUT', b, h: { 'x-vendor': S.vauth.id, 'x-pin': S.vauth.pin } }); await loadVendors(); loadVendorCtl(); } catch (e) { toast(e.message); } };
 async function loadVendor() {
   const el = $('#vlist'); if (!el || !S.vauth.pin) return;
   try {
     const os = await api('/vendor-orders', { h: { 'x-vendor': S.vauth.id, 'x-pin': S.vauth.pin } });
-    el.innerHTML = os.length ? os.map(o => `<div class="order"><div class="row"><b>${o.id} · ${esc(o.name)}</b><span class="tag">${esc(statusLabel(o.type, o.status))}</span></div><div class="meta">${o.lines.map(l => l.q + ' × ' + esc(l.n) + (l.note ? ' (' + esc(l.note) + ')' : '')).join(', ')}<br>${fmt(o.total, o.cur)} · ${o.pay}${o.age ? ' · 🪪 Check ID (' + o.age + '+)' : ''}${o.note ? ' · Note: ' + esc(o.note) : ''}${o.sched ? ' · Scheduled ' + new Date(o.sched).toLocaleString() : ''}${o.type === 'grocery' ? ' · If out of stock: ' + (o.subPref || 'refund') : ''}${o.issue ? ' · ⚠ ' + esc(o.issue.why) : ''}</div><div style="display:flex;gap:8px;margin-top:8px">${((o.mode === 'pickup' && o.status === 'ready') ? [['delivered', 'Mark picked up']] : NEXT[o.status] || []).map(([s, tt, c]) => `<button class="act ${c || ''}" data-set="${o.id}" data-s="${s}">${tt}</button>`).join('')}</div></div>`).join('') : '<p class="meta">No orders yet. New orders appear here automatically.</p>';
+    el.innerHTML = os.length ? os.map(o => `<div class="order"><div class="row"><b>${o.id} · ${esc(o.name)}</b><span class="tag">${esc(statusLabel(o.type, o.status))}</span></div><div class="meta">${o.lines.map(l => l.q + ' × ' + esc(l.n) + (l.note ? ' (' + esc(l.note) + ')' : '')).join(', ')}<br>${fmt(o.total, o.cur)} · ${o.pay}${o.age ? ' · Check ID (' + o.age + '+)' : ''}${o.note ? ' · Note: ' + esc(o.note) : ''}${o.sched ? ' · Scheduled ' + new Date(o.sched).toLocaleString() : ''}${o.type === 'grocery' ? ' · If out of stock: ' + (o.subPref || 'refund') : ''}${o.issue ? ' · ⚠ ' + esc(o.issue.why) : ''}</div><div style="display:flex;gap:8px;margin-top:8px">${((o.mode === 'pickup' && o.status === 'ready') ? [['delivered', 'Mark picked up']] : NEXT[o.status] || []).map(([s, tt, c]) => `<button class="act ${c || ''}" data-set="${o.id}" data-s="${s}">${tt}</button>`).join('')}</div></div>`).join('') : '<p class="meta">No orders yet. New orders appear here automatically.</p>';
   } catch (e) { el.innerHTML = `<p class="meta">${esc(e.message)}</p>`; }
 }
 function riderUI() {
@@ -447,7 +491,7 @@ async function loadRider() {
     const os = await api('/rider-orders' + (S.rAll ? '' : '?region=' + encodeURIComponent(S.region)), { h: { 'x-pin': S.rauth.pin, 'x-rider': S.rauth.name } }), by = {};
     os.filter(o => o.status === 'delivered').forEach(o => by[o.cur] = (by[o.cur] || 0) + Math.round(o.fee * .8) + (o.tip || 0));
     const ern = Object.entries(by).map(([c, n]) => money(n, c)).join(' + ') || '0', ee = $('#earn'); if (ee) { ee.style.display = ''; ee.innerHTML = `<div class="row"><b>Your earnings</b><span>${ern}</span></div><div class="meta">80% of each delivery fee plus 100% of tips, shown openly.</div>`; }
-    el.innerHTML = os.length ? os.map(o => { const cp = o.cloc || (o.lat != null ? o : null); return `<div class="order"><div class="row"><b>${o.id} · ${esc(o.vendor)}</b><span class="tag">${esc(statusLabel(o.type, o.status))}</span></div><div class="meta">${esc(o.city || '')} · Deliver to ${esc(o.name)}, ${esc(o.address)} · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a><br>${o.pay === 'Cash' ? 'Collect ' + fmt(o.total, o.cur) + ' cash' : 'Paid online (' + o.pay + ')'}${o.age ? '<br>🪪 Alcohol order: check ID. Customer must be ' + o.age + ' or older.' : ''}${o.cloc ? '<br>📍 Customer is sharing their live location' : ''}</div>
+    el.innerHTML = os.length ? os.map(o => { const cp = o.cloc || (o.lat != null ? o : null); return `<div class="order"><div class="row"><b>${o.id} · ${esc(o.vendor)}</b><span class="tag">${esc(statusLabel(o.type, o.status))}</span></div><div class="meta">${esc(o.city || '')} · Deliver to ${esc(o.name)}, ${esc(o.address)} · <a href="tel:${esc(o.phone)}">${esc(o.phone)}</a><br>${o.pay === 'Cash' ? 'Collect ' + fmt(o.total, o.cur) + ' cash' : 'Paid online (' + o.pay + ')'}${o.age ? '<br>Alcohol order: check ID. Customer must be ' + o.age + ' or older.' : ''}${o.cloc ? '<br>Customer is sharing their live location' : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${o.status === 'ready' ? `<button class="act" data-set="${o.id}" data-s="onway" data-rider="1">Pick up</button><a class="act" style="text-decoration:none" target="_blank" rel="noopener" href="${nav(o.vlat, o.vlng)}">Navigate to store</a>` : o.status === 'onway' ? `<button class="act" data-set="${o.id}" data-s="delivered" data-rider="1">Mark delivered</button><button class="act" data-gps="${o.id}">Share my GPS</button>${cp ? `<a class="act" style="text-decoration:none" target="_blank" rel="noopener" href="${nav(cp.cloc ? cp.lat : cp.lat, cp.lng)}">Navigate to customer</a>` : ''}<button class="act" data-sim="${o.id}">Simulate ride</button>` : ''}</div></div>`; }).join('') : '<p class="meta">Nothing to deliver right now.</p>';
   } catch (e) { el.innerHTML = `<p class="meta">${esc(e.message)}</p>`; }
 }
@@ -456,11 +500,11 @@ async function setStatus(id, s, rider) {
   try { await api('/orders/' + id, { m: 'PATCH', h, b: { status: s } }); if (s === 'delivered') stopGps(); if (s === 'onway') shareGps(id); rider ? loadRider() : loadVendor(); } catch (e) { toast(e.message); }
 }
 function stopGps() { if (GPS) { clearInterval(GPS.t); if (GPS.w != null) navigator.geolocation.clearWatch(GPS.w); GPS = null; } }
-const postLoc = (id, lat, lng) => api('/orders/' + id + '/location', { m: 'POST', h: { 'x-pin': S.rauth.pin, 'x-rider': S.rauth.name }, b: { lat, lng } }).catch(() => { });
-function shareGps(id) { stopGps(); if (!geoOK()) return toast(t('locNoSupport')); GPS = { w: navigator.geolocation.watchPosition(p => postLoc(id, p.coords.latitude, p.coords.longitude), () => toast(t('locDenied')), { enableHighAccuracy: true }) }; toast('📍 GPS on'); }
+const postLoc = (id, lat, lng, ex = {}) => api('/orders/' + id + '/location', { m: 'POST', h: { 'x-pin': S.rauth.pin, 'x-rider': S.rauth.name }, b: { lat, lng, ...ex } }).catch(() => { });
+function shareGps(id) { stopGps(); if (!geoOK()) return toast(t('locNoSupport')); GPS = { w: navigator.geolocation.watchPosition(p => postLoc(id, p.coords.latitude, p.coords.longitude, { sp: p.coords.speed, hd: p.coords.heading }), () => toast(t('locDenied')), { enableHighAccuracy: true }) }; toast('📍 GPS on'); }
 async function simulate(id) {
   stopGps(); const o = await api('/orders/' + id), a = o.loc || { lat: o.vlat, lng: o.vlng }, c = custPoint(o), to = c || { lat: o.vlat + .01, lng: o.vlng + .01 }; let k = 0;
-  GPS = { t: setInterval(() => { k++; postLoc(id, a.lat + (to.lat - a.lat) * k / 20, a.lng + (to.lng - a.lng) * k / 20); if (k >= 20) stopGps(); }, 1500) }; toast('Simulating a ride for 30 seconds');
+  GPS = { t: setInterval(() => { k++; postLoc(id, a.lat + (to.lat - a.lat) * k / 20, a.lng + (to.lng - a.lng) * k / 20, { sp: 8, hd: bearing([a.lat, a.lng], [to.lat, to.lng]) }); if (k >= 20) stopGps(); }, 1500) }; toast('Simulating a ride for 30 seconds');
 }
 const adm = (p, m, b) => api('/admin' + p, { m, b, h: { 'x-admin': S.aauth.pin } });
 const val = id => ($('#' + id) || {}).value || '';
@@ -470,8 +514,8 @@ async function loadAdmin() {
   try {
     const d = await adm('/overview?cc=' + S.cc + '&region=' + encodeURIComponent(S.region)), v = d.vendors.find(x => x.id === S.adminVid), cs = country(S.cc);
     el.innerHTML = `<div class="order"><div class="row"><b>Orders (all regions)</b><span>${d.stats.orders}</span></div><div class="row"><b>Delivered</b><span>${d.stats.delivered}</span></div><div class="row"><b>Delivered sales</b><span>${Object.entries(d.stats.revenue).map(([c, n]) => money(n, c)).join(' · ') || '0'}</span></div></div>
-    <h2 class="cat">Restaurants and stores · ${esc(regionName())}</h2>${d.vendors.map(x => `<div class="order"><div class="row"><b>${esc(x.name)}</b><span class="tag">${esc(x.city || '')} · ${x.type}</span></div><div class="meta">PIN ${esc(x.pin)} · ${x.items.length} items · ${fmt(x.fee, x.cur)} delivery · radius ${x.radius || 15} km</div><div style="display:flex;gap:8px;margin-top:8px"><button class="act" data-edit="${x.id}">Edit menu</button><button class="act no" data-del="${x.id}">Delete</button></div><div style="display:flex;gap:8px;margin-top:8px"><input id="ph-${x.id}" placeholder="Photo URL (https://…)" value="${esc(x.img || '')}"><button class="act" data-setph="${x.id}">Save</button></div></div>`).join('')}
-    ${v ? `<h2 class="cat">Menu: ${esc(v.name)}</h2>${v.items.map(i => `<div class="item"><div><h3>${esc(i.n)}</h3><p class="meta">${esc(i.c)} · ${fmt(i.p, v.cur)}${i.alc ? ' · 🔞' : ''}</p></div><button class="act no" data-delitem="${v.id}|${i.id}">Remove</button></div>`).join('') || '<p class="meta">No items yet.</p>'}
+    <h2 class="cat">Restaurants and stores · ${esc(regionName())}</h2>${d.vendors.map(x => `<div class="order"><div class="row"><b>${esc(x.name)}</b><span class="tag">${esc(x.city || '')} · ${x.type}</span></div><div class="meta">PIN ${esc(x.pin)} · ${x.items.length} items · ${fmt(x.fee, x.cur)} delivery · radius ${x.radius || 15} km</div><div style="display:flex;gap:8px;margin-top:8px"><button class="act" data-edit="${x.id}">Edit menu</button><button class="act no" data-del="${x.id}">Delete</button></div><div style="display:flex;gap:8px;margin-top:8px"><input id="ph-${x.id}" placeholder="Photo URL (https://…)" value="${esc(x.img || '')}"><button class="act" data-setph="${x.id}">Save</button></div><div style="display:flex;gap:8px;margin-top:8px"><input id="hr-${x.id}" placeholder="Hours 08:00-22:00 (empty = always)" value="${esc(x.hours || '')}"><button class="act" data-sethrs="${x.id}">Save</button></div></div>`).join('')}
+    ${v ? `<h2 class="cat">Menu: ${esc(v.name)}</h2>${v.items.map(i => `<div class="item"><div><h3>${esc(i.n)}${i.out ? ' (sold out)' : ''}</h3><p class="meta">${esc(i.c)} · ${fmt(i.p, v.cur)}${i.alc ? ' · 18+' : ''}</p><div class="pwrow"><input id="pr-${i.id}" inputmode="decimal" value="${i.p / 10 ** (country(v.country).dec || 0)}" aria-label="Price"><button class="act" data-setprice="${v.id}|${i.id}">Save price</button></div></div><button class="act no" data-delitem="${v.id}|${i.id}">Remove</button></div>`).join('') || '<p class="meta">No items yet.</p>'}
     <div class="form order"><label for="ai-c">Category</label><input id="ai-c" placeholder="Mains"><label for="ai-n">Item name</label><input id="ai-n"><label for="ai-d">Description</label><input id="ai-d"><label for="ai-p">Price (${v.cur}, e.g. 12.50)</label><input id="ai-p" inputmode="decimal"><label for="ai-t">Dietary tags (veg, vegan, gf, halal, spicy, nuts)</label><input id="ai-t"><label for="ai-i">Photo URL</label><input id="ai-i"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ai-a"> Alcohol (age check at delivery)</label><label for="ai-o">Options, one group per line. ! = required, + = pick many</label><textarea id="ai-o" rows="3" placeholder="Size!: Medium=0, Large=4&#10;Toppings+: Cheese=2, Olives=1.5"></textarea><button class="go" data-additem="${v.id}">Add item</button></div>` : ''}
     <h2 class="cat">Add a restaurant or store</h2><div class="form order"><label for="av-name">Name</label><input id="av-name"><label for="av-type">Type</label><select id="av-type"><option value="food">Restaurant</option><option value="grocery">Grocery store</option><option value="drinks">Drinks & wine shop</option><option value="household">Household & home store</option></select>
     <label for="av-cc">Country (sets the currency)</label><select id="av-cc">${S.countries.map(c => `<option value="${c.code}" ${c.code === S.cc ? 'selected' : ''}>${c.flag} ${esc(c.n)} · ${c.cur}</option>`).join('')}</select>
@@ -514,6 +558,8 @@ document.addEventListener('click', e => {
       case 'lang-auto': setLang(regionLang(), false); renderHeader(); sheetUI(); return render();
       case 'dismiss-lang': S.langNo[S.region] = 1; LS.set('if_langno', S.langNo); return refreshHome();
       case 'rall': S.rAll = !S.rAll; return riderUI();
+      case 'follow': S.follow = !S.follow; syncTools(); if (S.follow && MK.r && S.track && S.track.loc) MAP.panTo([S.track.loc.lat, S.track.loc.lng]); return;
+      case 'fit': { S.follow = false; syncTools(); const o = S.track, c = o && custPoint(o), ps = o ? [[o.vlat, o.vlng], o.loc && [o.loc.lat, o.loc.lng], c && [c.lat, c.lng]].filter(Boolean) : []; if (MAP && ps.length > 1) MAP.fitBounds(ps, { padding: [40, 40], maxZoom: 16 }); return; }
     }
   }
   if (d.lang) { setLang(d.lang, !d.auto); if (d.auto) { S.langSet = true; LS.set('if_langset', true); } renderHeader(); if (S.sheet) sheetUI(); return render(); }
@@ -530,6 +576,11 @@ document.addEventListener('click', e => {
   if (d.cd) { S.cart.q[d.cd] = Math.max(0, (S.cart.q[d.cd] || 0) + +d.d2); if (!cnt()) S.cart = { vid: null, q: {} }; saveCart(); syncGroup(); render(); return cartUI(false); }
   if (d.diet) { S.diet = S.diet.includes(d.diet) ? S.diet.filter(x => x !== d.diet) : [...S.diet, d.diet]; return render(); }
   if (d.redeem) { S.info.redeem = !S.info.redeem; LS.set('if_info', S.info); return cartUI(false); }
+  if (d.vpause !== undefined) return vcall('/vendor/status', { paused: !!+d.vpause });
+  if (d.vhours) return vcall('/vendor/status', { hours: val('vhrs') });
+  if (d.vout) return vcall('/vendor/items/' + d.vout, { out: !!+d.o });
+  if (d.setprice) { const [a, c] = d.setprice.split('|'); return adminAct(() => adm('/vendors/' + a + '/items/' + c, 'PUT', { p: val('pr-' + c) })); }
+  if (d.sethrs) return adminAct(() => adm('/vendors/' + d.sethrs, 'PUT', { hours: val('hr-' + d.sethrs) }));
   if (d.setph) return adminAct(() => adm('/vendors/' + d.setph, 'PUT', { img: val('ph-' + d.setph) }));
   if (d.grp === 'start') { api('/groups', { m: 'POST', b: { vendorId: S.v.id } }).then(g => { S.grp = { code: g.code, vid: g.vid, host: true, who: S.info.name || 'Host' }; LS.set('if_grp', S.grp); S.gl = []; render(); toast(t('grpStarted', { code: g.code })); }).catch(x => toast(x.message)); return; }
   if (d.grp === 'leave') { S.grp = null; S.gl = []; LS.set('if_grp', null); return render(); }
@@ -589,7 +640,7 @@ async function boot() {
   if (!regionObj(S.region)) { const cc = guessCountry(), r = (country(cc).regions || [])[0] || S.countries[0].regions[0]; S.region = r.key; S.cc = r.cc; first = true; LS.set('if_region', S.region); LS.set('if_cc', S.cc); } else S.cc = regionObj(S.region).cc;
   if (!S.langSet) setLang(regionLang());
   await loadVendors();
-  const qs = new URLSearchParams(location.search), pd = qs.get('paid'); if (pd) { if (qs.get('t')) { S.tok[pd] = qs.get('t'); LS.set('if_tok', S.tok); if (!S.orders.includes(pd)) { S.orders.unshift(pd); LS.set('if_orders', S.orders); } } history.replaceState(null, '', '/'); try { S.track = await api('/orders/' + pd); S.view = 'track'; } catch { } }
+  const qs = new URLSearchParams(location.search), pd = qs.get('paid') || qs.get('track'); if (pd) { if (qs.get('t')) { S.tok[pd] = qs.get('t'); LS.set('if_tok', S.tok); if (!S.orders.includes(pd)) { S.orders.unshift(pd); LS.set('if_orders', S.orders); } } history.replaceState(null, '', '/'); try { S.track = await api('/orders/' + pd); S.view = 'track'; } catch { } }
   const resetting = await authInit();
   go(); cartUI();
   if (resetting) openSheet('reset'); else if (first) openSheet('region');
@@ -598,3 +649,5 @@ async function boot() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { });
 }
 boot();
+
+

@@ -1,6 +1,6 @@
 // Instadrop backend: zero dependencies, needs Node 18+. Run: node server.js
 const http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-const RG = require('./regions'), AUTH = require('./auth');
+const RG = require('./regions'), AUTH = require('./auth'), NOTIFY = require('./notify');
 const PORT = process.env.PORT || 3000, DB = path.join(__dirname, 'data.json'), PUB = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml',
   '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
@@ -15,6 +15,8 @@ const MOMO = {
   key: process.env.MOMO_SUB_KEY, user: process.env.MOMO_API_USER, apikey: process.env.MOMO_API_KEY
 };
 
+const FLW = process.env.FLW_SECRET || ''; // Flutterwave: hosted checkout for cards and African mobile money (M-Pesa, Airtel, MTN, ...). FLW_HASH = webhook secret hash
+const MMOPT = { UG: 'mobilemoneyuganda', KE: 'mpesa', TZ: 'mobilemoneytanzania', RW: 'mobilemoneyrwanda', GH: 'mobilemoneyghana' };
 const STRIPE = process.env.STRIPE_KEY || ''; // set to take real card payments (Stripe Checkout)
 const TYPES = ['food', 'grocery', 'drinks', 'household'];
 const G = (name, flags, ...ch) => ({ name, req: flags.includes('!'), multi: flags.includes('+'), choices: ch.map(([n, p]) => ({ n, p })) });
@@ -36,7 +38,13 @@ for (const c of Object.values(CT)) {
   c.dec = new Intl.NumberFormat('en', { style: 'currency', currency: c.cur }).resolvedOptions().maximumFractionDigits; c.k = 10 ** c.dec;
   const x = 0.27 * c.usd, m = 10 ** Math.floor(Math.log10(x)); c.u = Math.max(1, Math.round(Math.round(x / m) * m * c.k)); // loyalty unit (about US$0.27) in minor units
 }
+// Tax: [rate, included in shown prices?]. Indicative defaults: check them with your accountant before going live.
+const TAXR = { UG: [.18, 1], KE: [.16, 1], TZ: [.18, 1], RW: [.18, 1], GH: [.15, 1], NG: [.075, 1], ZA: [.15, 1], GB: [.2, 1], US: [.08, 0], CA: [.13, 0], AU: [.1, 1], DE: [.19, 1], FR: [.2, 1], IN: [.05, 1], AE: [.05, 1], BR: [0, 1], MX: [.16, 1], JP: [.1, 1] };
+const TZC = { UG: 'Africa/Kampala', KE: 'Africa/Nairobi', TZ: 'Africa/Dar_es_Salaam', RW: 'Africa/Kigali', GH: 'Africa/Accra', NG: 'Africa/Lagos', ZA: 'Africa/Johannesburg', GB: 'Europe/London', US: 'America/New_York', CA: 'America/Toronto', AU: 'Australia/Sydney', DE: 'Europe/Berlin', FR: 'Europe/Paris', IN: 'Asia/Kolkata', AE: 'Asia/Dubai', BR: 'America/Sao_Paulo', MX: 'America/Mexico_City', JP: 'Asia/Tokyo' };
+for (const [k, c] of Object.entries(CT)) { c.tax = TAXR[k][0]; c.taxIncl = !!TAXR[k][1]; c.tz = TZC[k]; }
 const cOf = v => CT[v.country] || CT.UG;
+// Open = not paused and inside the optional hours "HH:MM-HH:MM" (local time of the country's main time zone).
+const isOpen = v => { if (v.paused) return false; const m = /^(\d\d):(\d\d)-(\d\d):(\d\d)$/.exec(v.hours || ''); if (!m) return true; let now; try { const p = new Intl.DateTimeFormat('en-GB', { timeZone: cOf(v).tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date()).split(':'); now = +p[0] * 60 + +p[1]; } catch { return true; } const a = +m[1] * 60 + +m[2], z = +m[3] * 60 + +m[4]; return a <= z ? now >= a && now < z : now >= a || now < z; };
 const nice = (usd, c) => { const v = usd * c.usd; return v >= 1000 ? Math.round(v / 50) * 50 : v >= 100 ? Math.round(v / 5) * 5 : v >= 10 ? Math.round(v) : Math.round(v * 20) / 20; };
 // mk: prices are given in major units (e.g. 12.5) and stored in minor units
 const mk = (id, type, name, cat, eta, fee, pin, lat, lng, items, cc = 'UG') => { const k = CT[cc].k, sc = p => Math.round(p * k); return {
@@ -148,7 +156,7 @@ function regional(have) {
 let db, saveTimer = null;
 function writeNow() { try { fs.writeFileSync(DB + '.tmp', JSON.stringify(db)); fs.renameSync(DB + '.tmp', DB); } catch (e) { console.error('Could not save data:', e.message); } saveTimer = null; }
 // With DATABASE_URL set, every change is written through to PostgreSQL (appdb.js); otherwise data.json is used.
-const APPDB = process.env.DATABASE_URL ? require('./appdb')(AUTH.store.pool) : null;
+const APPDB = process.env.DATABASE_URL ? require('./appdb')(AUTH.store.pool, require('./bus')) : null;
 function save(o) {
   if (o && o.id) notify(o);
   if (APPDB) { if (o && o.id) APPDB.queueOrder(o); APPDB.queueRest(); return; }
@@ -166,10 +174,18 @@ function sse(req, res, channel, first) {
   res.write('retry: 2000\n\n'); if (first !== undefined) res.write('data: ' + JSON.stringify(first) + '\n\n');
   if (!subs.has(channel)) subs.set(channel, new Set()); subs.get(channel).add(res);
   const hb = setInterval(() => res.write(': ping\n\n'), 20000);
-  req.on('close', () => { clearInterval(hb); const s = subs.get(channel); if (s) { s.delete(res); if (!s.size) subs.delete(channel); } });
+  res.on('close', () => { clearInterval(hb); const s = subs.get(channel); if (s) { s.delete(res); if (!s.size) subs.delete(channel); } });
 }
 function emit(channel, data) { const s = subs.get(channel); if (s) for (const r of s) r.write('data: ' + JSON.stringify(data) + '\n\n'); }
-function notify(o) { emit('order:' + o.id, pubOrder(o)); emit('vendor:' + o.vendorId, { changed: o.id }); emit('riders', { changed: o.id, region: o.region }); }
+const BUS = require('./bus');
+function notifyLocal(o) { emit('order:' + o.id, pubOrder(o)); emit('vendor:' + o.vendorId, { changed: o.id }); emit('riders', { changed: o.id, region: o.region }); }
+function notify(o) { notifyLocal(o); BUS.publish('order', { o }); } // other servers update their copy and tell their own viewers
+// An order changed on another server: copy it in (keeping the same object, other code may hold it) and push it to viewers here.
+BUS.handle('order', ({ o }) => {
+  if (!db || !o || !o.id) return; const mine = ordr(o.id);
+  if (mine) { for (const k of Object.keys(mine)) delete mine[k]; Object.assign(mine, o); } else { db.orders.push(o); indexOrder(o); }
+  notifyLocal(ordr(o.id));
+});
 const pubOrder = (o, withToken) => { if (withToken) return o; const { ctoken, ...rest } = o; return rest; };
 
 async function loadData() {
@@ -216,7 +232,7 @@ const FLOW = {
 };
 const EMO = [[/wine|spirit|beer|liquor/, '🍷'], [/tex-mex|bbq|smoke/, '🍖'], [/mexican|taco/, '🌮'], [/japan|sushi|ramen/, '🍣'], [/indian|biryani/, '🍛'], [/burger|american/, '🍔'], [/french|québécois|canadian/, '🥐'], [/middle eastern|shawarma/, '🥙'], [/brazil/, '🥩'], [/german/, '🥨'], [/british|fish/, '🍟'], [/cuban|florid|californ|new york/, '🥪'], [/kenyan|nigerian|ghanaian|tanzanian|rwandan|ugandan|south african|australian/, '🍲'], [/pizza/, '🍕'], [/rolex|street/, '🌯'], [/local|grill/, '🍗'], [/soft|water|juice|drink/, '🥤'], [/household|clean|home/, '🏠'], [/super/, '🛒'], [/fruit|veg/, '🥬'], [/essential/, '🧴']];
 const hs = s => [...s].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
-const pub = v => ({ id: v.id, type: v.type, name: v.name, cat: v.cat, eta: v.eta, fee: v.fee, lat: v.lat, lng: v.lng, img: v.img || '',
+const pub = v => ({ open: isOpen(v), paused: !!v.paused, hours: v.hours || '', id: v.id, type: v.type, name: v.name, cat: v.cat, eta: v.eta, fee: v.fee, lat: v.lat, lng: v.lng, img: v.img || '',
   country: v.country || 'UG', region: v.region || '', city: v.city || '', radius: v.radius || 15, tags: [...new Set(v.items.flatMap(i => i.tags || []))], cur: cOf(v).cur, alcohol: v.items.some(i => i.alc), kw: v.items.map(i => i.n).join(' ').toLowerCase(),
   emoji: v.emoji || (EMO.find(([r]) => r.test((v.cat + ' ' + v.name).toLowerCase())) || [0, { food: '🍽️', grocery: '🛒', drinks: '🥤', household: '🏠' }[v.type] || '🛍️'])[1],
   rating: +(((4.2 + (hs(v.id) % 8) / 10) * (100 + hs(v.id) % 900) + (v.rsum || 0)) / (100 + hs(v.id) % 900 + (v.rcount || 0))).toFixed(1), reviews: 100 + hs(v.id) % 900 + (v.rcount || 0) });
@@ -237,6 +253,7 @@ function buildLines(v, items, allowEmpty) {
   for (const it of items || []) {
     const x = v.items.find(i => i.id === it.id), q = Math.floor(it.q);
     if (!x || !(q > 0 && q <= 20)) continue;
+    if (x.out) throw bad(x.n + ' is sold out');
     let extra = 0; const labels = [], sel = (it.sel || []).map(String);
     for (const g of x.opts || []) {
       const ch = g.choices.filter(c => sel.includes(g.name + ':' + c.n));
@@ -262,6 +279,14 @@ const markPaid = o => { o.payStatus = 'paid'; o.log.push(['paid', Date.now()]); 
 async function startPayment(o, phone, origin) {
   const cf = CT[o.country] || CT.UG;
   o.payUrl = null;
+  if (FLW && (o.pay === 'Mobile money' || !STRIPE)) { // Flutterwave hosted checkout (untested against Flutterwave's servers: try it with test keys first)
+    o.payStatus = 'pending';
+    const r = await fetch('https://api.flutterwave.com/v3/payments', { method: 'POST', headers: { Authorization: 'Bearer ' + FLW, 'content-type': 'application/json' }, body: JSON.stringify({ tx_ref: o.id, amount: o.total / cf.k, currency: o.cur,
+      redirect_url: origin + '/?paid=' + o.id + '&t=' + o.ctoken, payment_options: o.pay === 'Card' ? 'card' : (MMOPT[o.country] || 'card'), customer: { email: 'orders@' + new URL(origin).hostname, phonenumber: o.phone, name: o.name }, customizations: { title: 'Instadrop ' + o.id } }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.data || !j.data.link) { o.payStatus = 'failed'; save(o); throw new Error('Could not start the payment. Try again.'); }
+    o.payRef = o.id; o.payUrl = j.data.link; o.payProv = 'flw'; save(o); return;
+  }
   if (o.pay === 'Card') {
     o.payStatus = 'pending';
     if (STRIPE) { // Stripe Checkout (untested against Stripe's servers: try it with a test key first)
@@ -295,6 +320,11 @@ async function startPayment(o, phone, origin) {
 async function refreshPayment(o) {
   if (o.payStatus !== 'pending' || !o.payRef) return;
   try {
+    if (o.payProv === 'flw') {
+      const j = await (await fetch('https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref=' + encodeURIComponent(o.id), { headers: { Authorization: 'Bearer ' + FLW } })).json(), d = j.data;
+      if (d && d.status === 'successful' && d.currency === o.cur && d.amount >= o.total / (CT[o.country] || CT.UG).k) markPaid(o);
+      return;
+    }
     if (o.pay === 'Card') {
       const j = await (await fetch('https://api.stripe.com/v1/checkout/sessions/' + o.payRef, { headers: { Authorization: 'Bearer ' + STRIPE } })).json();
       if (j.payment_status === 'paid') markPaid(o); else if (j.status === 'expired') { o.payStatus = 'failed'; save(o); }
@@ -325,11 +355,15 @@ async function route(req, res, p, m, b) {
   }
   let r; const origin = (h['x-forwarded-proto'] || 'http') + '://' + h.host;
   const q = new URL(req.url, 'http://x').searchParams;
-  if (m === 'GET' && p === '/api/health') return send(res, 200, { ok: true, uptime: Math.round(process.uptime()) }); // for the load balancer's health checks
+  if (m === 'GET' && p === '/api/health') return send(res, 200, { ok: true, uptime: Math.round(process.uptime()), storage: APPDB ? 'postgres' : 'files', redis: BUS.enabled ? (BUS.redis.up ? 'up' : 'down') : 'off', server: BUS.id }); // for the load balancer's health checks
   if (p.startsWith('/api/auth/') && await AUTH.handle(req, res, p, m, b, { send, fail })) return;
   if (m === 'GET' && p === '/api/me/orders') { // everything this account ordered, from any device
     const u = AUTH.user(req); if (!u) return fail(res, 401, 'Please sign in', { code: 'auth' });
     return send(res, 200, (userOrders.get(u.sub) || []).slice(-100).reverse().map(id => pubOrder(ordr(id), true)));
+  }
+  if (m === 'POST' && p === '/api/webhooks/flutterwave') { // Flutterwave calls this when a payment finishes; we verify with their API before marking paid
+    if (!process.env.FLW_HASH || h['verif-hash'] !== process.env.FLW_HASH) return fail(res, 401, 'Bad signature');
+    const wo = ordr(String((b.data || {}).tx_ref || '')); if (wo) await refreshPayment(wo); return send(res, 200, { ok: true });
   }
   if (m === 'GET' && p === '/api/countries') {
     const count = {}; for (const v of db.vendors) count[v.region] = (count[v.region] || 0) + 1;
@@ -373,8 +407,9 @@ async function route(req, res, p, m, b) {
   if (m === 'POST' && p === '/api/orders') {
     const v = db.vendors.find(x => x.id === b.vendorId);
     if (!v) return fail(res, 400, 'Unknown restaurant or store');
+    if (!isOpen(v) && !(+b.sched > Date.now())) return fail(res, 409, v.name + ' is closed right now. Schedule your order for later.', { code: 'closed' });
     const au = AUTH.user(req); if (REQUIRE_LOGIN && !au) return fail(res, 401, 'Please sign in to order', { code: 'auth' });
-    if (!AUTH.limiter.hit('ord:' + AUTH.ipOf(req), 40, 600000).ok) return fail(res, 429, 'Too many orders from this network. Try again in a few minutes', { code: 'rate' });
+    if (!(await AUTH.limiter.hit('ord:' + AUTH.ipOf(req), 40, 600000)).ok) return fail(res, 429, 'Too many orders from this network. Try again in a few minutes', { code: 'rate' });
     const cf = cOf(v), pickup = b.mode === 'pickup', name = clean(b.name), phone = clean(b.phone), address = pickup ? 'Pickup at ' + v.name : clean(b.address);
     if (!name || !address || !/^[+\d][\d\s-]{7,}$/.test(phone)) return fail(res, 400, 'Enter your name, a valid phone number and delivery address');
     const lines = buildLines(v, b.items, !!b.group);
@@ -394,9 +429,10 @@ async function route(req, res, p, m, b) {
     const discount = Math.round(sub * (PROMOS[code] || 0));
     const sched = +b.sched > Date.now() && +b.sched < Date.now() + 48 * 36e5 ? Math.round(+b.sched) : null;
     const acct = lp(phone, cf.dial), pm = cf.pay.includes(b.pay) ? b.pay : cf.pay[0], cash = pm === 'Cash', fee = pickup || tierOf(acct.life) === 'Gold' ? 0 : v.fee, redeemed = b.redeem && acct.pts >= 100 && sub >= 5 * cf.u ? 5 * cf.u : 0, service = sub >= FREE_SVC * cf.u ? 0 : Math.round(sub * SERVICE), tip = pickup ? 0 : Math.min(Math.max(0, Math.round(+b.tip || 0)), sub);
+    const taxBase = Math.max(0, sub - discount + fee + service), taxAmt = cf.taxIncl ? Math.round(taxBase - taxBase / (1 + cf.tax)) : Math.round(taxBase * cf.tax);
     const o = {
       id: newOrderId(), userId: au ? au.sub : null, vendorId: v.id, vendor: v.name, type: v.type, vlat: v.lat, vlng: v.lng,
-      lines, sub, fee, service, tip, redeemed, mode: pickup ? 'pickup' : 'delivery', discount, total: sub + fee + service + tip - discount - redeemed, name, phone, address, lat: clat, lng: clng,
+      lines, sub, fee, service, tip, redeemed, mode: pickup ? 'pickup' : 'delivery', discount, tax: taxAmt, taxIncl: !!cf.taxIncl, taxRate: cf.tax, total: sub + fee + service + tip - discount - redeemed + (cf.taxIncl ? 0 : taxAmt), name, phone, address, lat: clat, lng: clng,
       country: v.country || 'UG', region: v.region || '', city: v.city || '', ctoken: crypto.randomUUID(), cloc: null, trail: [], cur: cf.cur, dial: cf.dial, age: hasAlc ? cf.age : 0, pay: pm, payStatus: cash ? 'cash' : 'unpaid', note: clean(b.note), subPref: ['refund', 'substitute', 'call'].includes(b.subPref) ? b.subPref : 'refund', sched, status: 'placed', rider: null,
       loc: null, at: Date.now(), log: [['placed', Date.now()]]
     };
@@ -433,7 +469,7 @@ async function route(req, res, p, m, b) {
     const o = ordr(r[1]), name = clean(h['x-rider']);
     if (!o || h['x-pin'] !== RIDER_PIN || o.rider !== name || o.status !== 'onway') return fail(res, 401, 'Not allowed');
     if (num(b.lat) === null || num(b.lng) === null) return fail(res, 400, 'Bad location');
-    o.loc = { lat: b.lat, lng: b.lng, t: Date.now() }; (o.trail = o.trail || []).push([+b.lat.toFixed(5), +b.lng.toFixed(5)]); if (o.trail.length > 80) o.trail.shift(); save(o);
+    o.loc = { lat: b.lat, lng: b.lng, t: Date.now(), sp: num(b.sp), hd: num(b.hd) }; (o.trail = o.trail || []).push([+b.lat.toFixed(5), +b.lng.toFixed(5)]); if (o.trail.length > 80) o.trail.shift(); save(o);
     return send(res, 200, { ok: true });
   }
   if (m === 'POST' && (r = p.match(/^\/api\/orders\/([\w-]+)\/customer-location$/))) {
@@ -448,6 +484,17 @@ async function route(req, res, p, m, b) {
     if (!o || !canSee(o, req, q)) return fail(res, 404, 'Order not found');
     await refreshPayment(o);
     return send(res, 200, pubOrder(o));
+  }
+  if (m === 'PUT' && p.startsWith('/api/vendor/')) { // kitchen / store staff: pause orders, set hours, mark items sold out
+    const sv = db.vendors.find(x => x.id === h['x-vendor']); if (!sv || sv.pin !== h['x-pin']) return fail(res, 401, 'Wrong vendor PIN');
+    if (p === '/api/vendor/status') {
+      if (b.paused !== undefined) sv.paused = !!b.paused;
+      if (b.hours !== undefined) { const hr = clean(b.hours); if (hr && !/^\d\d:\d\d-\d\d:\d\d$/.test(hr)) return fail(res, 400, 'Use hours like 08:00-22:00'); sv.hours = hr; }
+      save(); return send(res, 200, { open: isOpen(sv) });
+    }
+    const im = p.match(/^\/api\/vendor\/items\/([\w-]+)$/), si = im && sv.items.find(i => i.id === im[1]);
+    if (si) { si.out = !!b.out; save(); return send(res, 200, { ok: true }); }
+    return fail(res, 404, 'Not found');
   }
   if (m === 'GET' && p === '/api/vendor-orders') {
     const v = db.vendors.find(x => x.id === h['x-vendor']);
@@ -474,6 +521,10 @@ async function route(req, res, p, m, b) {
     if (b.status === 'rejected' && o.redeemed) lp(o.phone, o.dial).pts += 100;
     if (b.status === 'delivered') { const a = lp(o.phone, o.dial), e = Math.floor(o.total / (CT[o.country] || CT.UG).u); a.pts += e; a.life += e; o.earned = e; }
     o.status = b.status; o.log.push([b.status, Date.now()]); save(o);
+    if (NOTIFY.enabled) { // text the customer on every important step
+      const say = { accepted: 'was accepted', preparing: 'is being prepared', ready: 'is ready', onway: 'is on the way. Track the rider: ' + origin + '/?track=' + o.id + '&t=' + o.ctoken, delivered: 'was delivered. Enjoy!', rejected: 'was declined by the store' }[b.status];
+      if (say) NOTIFY.send(msisdn(o.phone, o.dial), 'Instadrop ' + o.id, 'Your order ' + say);
+    }
     return send(res, 200, pubOrder(o));
   }
 
@@ -502,6 +553,8 @@ async function route(req, res, p, m, b) {
         for (const k of ['name', 'cat', 'pin']) if (b[k] !== undefined) v[k] = clean(b[k]) || v[k];
         if (b.eta !== undefined && +b.eta >= 0) v.eta = +b.eta; if (b.fee !== undefined && +b.fee >= 0) v.fee = Math.round(+b.fee * cOf(v).k);
         if (TYPES.includes(b.type)) v.type = b.type;
+        if (b.paused !== undefined) v.paused = !!b.paused;
+        if (b.hours !== undefined) v.hours = /^\d\d:\d\d-\d\d:\d\d$/.test(clean(b.hours)) ? clean(b.hours) : '';
         if (b.img !== undefined) v.img = /^https?:\/\/\S+$/.test(clean(b.img)) ? clean(b.img) : '';
         save(); return send(res, 200, v);
       }
@@ -513,6 +566,12 @@ async function route(req, res, p, m, b) {
         tags: String(b.t || '').toLowerCase().split(/[\s,]+/).filter(t => TAGS.includes(t)), alc: !!b.alc, opts: parseOpts(b.o, k), img: /^https?:\/\/\S+$/.test(clean(b.img)) ? clean(b.img) : '' }); save();
       return send(res, 201, v);
     }
+    if (m === 'PUT' && (r = p.match(/^\/api\/admin\/vendors\/(\w+)\/items\/([\w-]+)$/))) { // edit price, name, description, category, sold-out flag
+      const v = db.vendors.find(x => x.id === r[1]), it = v && v.items.find(i => i.id === r[2]); if (!it) return fail(res, 404, 'Item not found');
+      if (b.p !== undefined) { const pr = Math.round(+b.p * cOf(v).k); if (!(pr > 0)) return fail(res, 400, 'Enter a price above zero'); it.p = pr; }
+      for (const k of ['n', 'd', 'c']) if (b[k] !== undefined) it[k] = clean(b[k]) || it[k];
+      if (b.out !== undefined) it.out = !!b.out; save(); return send(res, 200, v);
+    }
     if (m === 'DELETE' && (r = p.match(/^\/api\/admin\/vendors\/(\w+)\/items\/([\w-]+)$/))) {
       const v = db.vendors.find(x => x.id === r[1]); if (!v) return fail(res, 404, 'Vendor not found');
       v.items = v.items.filter(i => i.id !== r[2]); save(); return send(res, 200, v);
@@ -521,11 +580,11 @@ async function route(req, res, p, m, b) {
   fail(res, 404, 'Not found');
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const p = new URL(req.url, 'http://x').pathname; let b = '';
   res.setHeader('x-content-type-options', 'nosniff'); res.setHeader('x-frame-options', 'DENY'); res.setHeader('referrer-policy', 'strict-origin-when-cross-origin'); res.setHeader('permissions-policy', 'geolocation=(self), camera=(), microphone=()');
   if ((req.headers['x-forwarded-proto'] || '') === 'https') res.setHeader('strict-transport-security', 'max-age=31536000');
-  if (p.startsWith('/api/') && !p.startsWith('/api/stream/') && p !== '/api/health' && !AUTH.limiter.hit('api:' + AUTH.ipOf(req), 1500, 60000).ok) { res.setHeader('retry-after', '30'); return fail(res, 429, 'Too many requests. Slow down a little', { code: 'rate' }); }
+  if (p.startsWith('/api/') && !p.startsWith('/api/stream/') && p !== '/api/health' && !(await AUTH.limiter.hit('api:' + AUTH.ipOf(req), 1500, 60000)).ok) { res.setHeader('retry-after', '30'); return fail(res, 429, 'Too many requests. Slow down a little', { code: 'rate' }); }
   req.on('data', d => { b += d; if (b.length > 1e5) req.destroy(); });
   req.on('end', async () => {
     try { await route(req, res, p, req.method, b ? JSON.parse(b) : {}); }

@@ -12,32 +12,34 @@ Follows the six steps from the reference video:
 
 Tested with `47` end-to-end assertions (signup, tampered/`alg=none` tokens, brute force, refresh reuse, MFA with an independent TOTP implementation, order privacy, 24 concurrent logins).
 
-## PostgreSQL (built and tested)
-Set `DATABASE_URL`. See the README. What lives where:
+## PostgreSQL and Redis (built and tested)
+Set `DATABASE_URL` (PostgreSQL) and `REDIS_URL` (Redis). See the README.
 
-| Data | In PostgreSQL | Shared by all servers? |
+| Data / job | Where | Shared by all servers? |
 |---|---|---|
-| Users, password hashes, MFA | `users` | Yes: every lookup hits the database (unique indexes on email and phone settle sign-up races) |
-| Login sessions / refresh tokens | `sessions` | Yes: rotation is a compare-and-swap, so of two simultaneous refreshes with one token only one wins |
-| Password reset links | `resets` | Yes: `DELETE … RETURNING`, so a link works once even across servers |
-| Wrong-password and wrong-MFA counters | `limits` (unlogged) | Yes: guesses spread over servers do not multiply the allowance |
-| Vendors, menus, orders, loyalty, group carts | `vendors`, `orders`, `kv` | **Saved, but not yet shared live**: each server loads them at start and keeps a copy in memory |
+| Users, password hashes, MFA | PostgreSQL `users` | Yes: every lookup hits the database (unique indexes settle sign-up races) |
+| Login sessions / refresh tokens | PostgreSQL `sessions` | Yes: rotation is a compare-and-swap, so of two simultaneous refreshes with one token only one wins |
+| Password reset links | PostgreSQL `resets` | Yes: `DELETE … RETURNING`, single use across servers |
+| Per-IP flood limits, wrong-password and wrong-MFA counters | Redis (atomic Lua); without Redis: PostgreSQL for account counters, memory for IP limits | Yes with Redis |
+| Vendors, menus, orders, loyalty, group carts | PostgreSQL `vendors`, `orders`, `kv`, with a working copy in each server's memory | Saved by every server; kept current between servers by Redis pub/sub |
+| Live tracking pushes (SSE) | Pub/sub: the server that changed an order publishes it, every server pushes to its own viewers | Yes with Redis |
+| Profile cache | In-memory LRU (60 s) per server, invalidated everywhere by pub/sub | Yes with Redis |
 
-Tested against PostgreSQL 16 (native, SCRAM-SHA-256): the 47 auth checks pass on both the file and the PostgreSQL backend, and `test/multi-server.test.js` checks two servers on one database (cross-server login and refresh, one winner in a simultaneous refresh race, duplicate sign-up race, single-use reset link, lockout across servers). A full browser run (sign up, order, track, reload, devices, MFA setup, sign out) passes on PostgreSQL.
+Tested (PostgreSQL 16 and Redis 7, native, with passwords): the 47 auth checks pass on files, on PostgreSQL, and on PostgreSQL + Redis; `test/multi-server.test.js` and `test/redis.test.js` run two servers on one database and one Redis: cross-server login/refresh, one winner in a refresh race, duplicate sign-up race, single-use reset link, lockout across servers, a per-IP sign-up limit shared across servers, an order placed on one server visible on the other, a customer connected to server B receiving a live update caused on server A, a new place added on A appearing on B, Redis stopped and restarted (sign-in kept working on local limits, then pub/sub resumed). A full browser run passes on PostgreSQL + Redis.
 
 ## Honest limits
-- **Orders and menus across servers.** A second server will not see an order or menu edit made on the first until it restarts, because those are cached in memory. Fix: make order/vendor reads query the database (`ordr()` and the vendor list become async) and publish changes with `LISTEN/NOTIFY` so each server can push live updates (SSE) to its own viewers. Until then, run **one app server** with PostgreSQL, or route each region to one server, and scale the *sign-in* tier freely.
-- **Memory at 10M users.** All orders are loaded into memory at start. Load only recent orders (and read old ones from the table) before the order table gets large.
-- **Per-IP request limits** are still per server (they blunt floods only). Use your load balancer / CDN rate limiting in front, or Redis.
+- **Order edits are last-writer-wins.** Servers copy each other's orders through pub/sub. If two servers change the same order within a few milliseconds, one change can overwrite the other. Normal use (kitchen, then rider, then customer, seconds apart) is fine. Before big scale, move order changes to a single atomic database update (`UPDATE … WHERE status = $expected`).
+- **Messages lost while a server is disconnected from Redis are not replayed.** A server that missed some restores itself on restart (it reloads from PostgreSQL). Use Redis Streams if you need guaranteed delivery.
+- **Memory at 10M users.** Every server keeps every order in memory. Load only recent orders (read old ones from the table) before the order table gets large. Rider GPS pings publish the whole order each time: throttle them before thousands of live riders.
 - **Argon2id** is not in Node 22. scrypt is a sound substitute. On Node 24+ switch `hashPw/checkPw` to `crypto.argon2`.
-- **Measured throughput**: about 7 logins/second on a 2-CPU sandbox with 64 MiB scrypt. That is expected: hashing is deliberately expensive. Refresh and API calls do not hash. Ten million *accounts* is easy; the hard number is *simultaneous logins*. Plan (peak logins per second ÷ ~3 per core) cores.
-- **Not tested**: TLS to PostgreSQL (`sslmode=require`), `docker-compose.yml`, PgBouncer, the nginx sketch, any Redis use. The PostgreSQL driver in `pg.js` is our own and small: for critical production you may prefer the official `pg` package (anything with `query(sql, params)` and `tx(fn)` fits).
+- **Measured throughput**: about 6–7 logins/second on a 2-CPU sandbox with 64 MiB scrypt. That is expected: hashing is deliberately expensive. Refresh and API calls do not hash. Ten million *accounts* is easy; the hard number is *simultaneous logins*. Plan (peak logins per second ÷ ~3 per core) cores.
+- **Not tested**: TLS to PostgreSQL or Redis (`sslmode=require`, `rediss://`), Redis Cluster/Sentinel (the client talks to one address: put a managed or proxied endpoint in front), PgBouncer, `docker-compose.yml`, the nginx sketch. `pg.js` and `redis.js` are our own small clients: for critical production you may prefer the official `pg` and `ioredis`/`redis` packages.
 
 ## Going to many servers
-1. Run **PostgreSQL** with backups and a replica; put PgBouncer (transaction mode) in front when you have many servers (`PG_POOL` small per server).
+1. Run **PostgreSQL** with backups and a replica, and a private, password-protected **Redis**; put PgBouncer (transaction mode) in front when you have many servers (`PG_POOL` small per server).
 2. Run N identical servers behind a load balancer: same `JWT_SECRET`, `DATABASE_URL`, `TRUST_PROXY=1`, `NODE_ENV=production`, `UV_THREADPOOL_SIZE` ≥ `HASH_CONCURRENCY`, health check `GET /api/health`. SSE needs long-lived connections allowed.
 3. Dedicate cores to `/api/auth/login|signup|password|reset`, the only CPU-heavy routes.
-4. Finish the order/vendor sharing described above before serving orders from more than one server.
+4. Make order changes atomic in the database (see the first limit above) before heavy multi-server order traffic.
 5. Rotate `JWT_SECRET` by accepting two keys for one access-token lifetime (15 minutes).
 6. Plug a real email/SMS provider into `notify()`; add email/phone verification before trusting `verified`.
 

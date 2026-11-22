@@ -60,9 +60,12 @@ class LRU {
   del(k) { this.m.delete(k); }
 }
 const cache = new LRU(50000, 60000);
+const bus = require('./bus'); // Redis pub/sub between servers (no-op without REDIS_URL)
 const publicUser = u => ({ id: u.id, name: u.name, email: u.email || null, phone: u.phone || null, role: u.role, mfa: !!(u.mfa && u.mfa.on), created: u.created });
 const profile = async id => { let p = cache.get(id); if (!p) { const u = await store.userById(id); if (!u) return null; p = publicUser(u); cache.set(id, p); } return p; };
-const putUser = async u => { await store.userPut(u); cache.del(u.id); };
+const dropProfile = id => { cache.del(id); bus.publish('user', { id }); }; // other servers drop their copy too
+bus.handle('user', d => cache.del(d.id));
+const putUser = async u => { await store.userPut(u); dropProfile(u.id); };
 
 // ── rate limiting (in memory per server; use Redis when you run many servers) ─
 class Limiter {
@@ -74,7 +77,11 @@ class Limiter {
 const RL = new Limiter();
 // Account-level counters (wrong passwords, wrong MFA codes) live in the database when there is one, so they hold across all servers.
 // Per-IP request limits stay in memory per server: they only blunt floods, and a load balancer spreads one client's IP across servers evenly enough.
-const AL = { hit: (k, max, ms) => store.limitHit ? store.limitHit(k, max, ms) : RL.hit(k, max, ms), over: (k, max) => store.limitOver ? store.limitOver(k, max) : RL.over(k, max), clear: k => store.limitClear ? store.limitClear(k) : RL.clear(k) };
+const LIMITS = require('./limiter');
+const mem = LIMITS.local(RL);
+const dbLimits = store.limitHit ? { hit: (k, m, ms) => store.limitHit(k, m, ms), over: (k, m) => store.limitOver(k, m), clear: k => store.limitClear(k) } : mem;
+const IPL = bus.redis ? LIMITS.withRedis(bus.redis, mem) : mem;       // per-IP flood limits: Redis (shared) or this server's memory
+const AL = bus.redis ? LIMITS.withRedis(bus.redis, dbLimits) : dbLimits; // account guess counters: Redis, else PostgreSQL, else memory
 const MIN = 60e3, HOUR = 60 * MIN;
 
 // ── passwords ─────────────────────────────────────────────────────────────
@@ -140,20 +147,20 @@ const seal = t => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv
 const unseal = s => { const b = Buffer.from(s, 'base64url'), d = crypto.createDecipheriv('aes-256-gcm', ENC, b.subarray(0, 12)); d.setAuthTag(b.subarray(12, 28)); return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8'); };
 
 // ── delivery of reset links / codes (console in development; plug in email / SMS providers here) ─
-const notify = (to, subject, text) => { console.log(`[notify] to=${to} | ${subject} | ${text}`); /* TODO production: send with your email / SMS provider */ };
+const notify = require('./notify').send; // email via RESEND_KEY, SMS via TWILIO_*, or NOTIFY_WEBHOOK; otherwise printed to the console
 
 // ── HTTP routes ───────────────────────────────────────────────────────────
 async function handle(req, res, p, m, b, { send, fail }) {
   const ip = ipOf(req), body = b && typeof b === 'object' ? b : {};
   const tooMany = (retry, msg) => { res.setHeader('Retry-After', retry); return fail(res, 429, msg || 'Too many attempts. Try again in ' + (retry > 90 ? Math.ceil(retry / 60) + ' minutes' : retry + ' seconds'), { code: 'rate', retry }); };
-  const guard = (key, max, ms) => { const r = RL.hit(key, max, ms); return r.ok ? null : tooMany(r.retry); };
+  const guard = async (key, max, ms) => { const r = await IPL.hit(key, max, ms); if (r.ok) return false; tooMany(r.retry); return true; }; // true = answered 429, caller must stop
   const needUser = async () => { const c = claims(req); if (!c) { fail(res, 401, 'Please sign in', { code: 'auth' }); return null; } const u = await store.userById(c.sub); if (!u) { fail(res, 401, 'Please sign in', { code: 'auth' }); return null; } return { c, u }; };
   const csrf = () => req.headers['x-requested-with'] === 'instadrop';
   const busy = e => e.code === 'busy' ? (res.setHeader('Retry-After', 5), fail(res, 503, e.message, { code: 'busy' })) : null;
   try {
     // ── sign up
     if (m === 'POST' && p === '/api/auth/signup') {
-      if (guard('su:' + ip, 10, HOUR)) return true;
+      if (await guard('su:' + ip, 10, HOUR)) return true;
       const id = parseId(body.identifier ?? body.email ?? body.phone, body.dial), name = String(body.name || '').trim().normalize('NFKC').slice(0, 60);
       if (!name) return fail(res, 400, 'Enter your name'), true;
       if (!id) return fail(res, 400, 'Enter a valid email address or phone number'), true;
@@ -167,7 +174,7 @@ async function handle(req, res, p, m, b, { send, fail }) {
     }
     // ── sign in (step 1)
     if (m === 'POST' && p === '/api/auth/login') {
-      if (guard('li:' + ip, 40, 10 * MIN)) return true;
+      if (await guard('li:' + ip, 40, 10 * MIN)) return true;
       const id = parseId(body.identifier ?? body.email ?? body.phone, body.dial), pw = String(body.password || '');
       if (!id || !pw || pw.length > 128) return fail(res, 401, 'Wrong email / phone or password', { code: 'bad' }), true;
       const wait = await AL.over('fail:' + id.key, 5); if (wait) return tooMany(wait, 'Too many wrong attempts for this account. Try again in ' + Math.ceil(wait / 60) + ' minutes, or reset your password'), true;
@@ -180,7 +187,7 @@ async function handle(req, res, p, m, b, { send, fail }) {
     }
     // ── sign in (step 2, only when multi-factor is on)
     if (m === 'POST' && p === '/api/auth/mfa/verify') {
-      if (guard('mf:' + ip, 40, 10 * MIN)) return true;
+      if (await guard('mf:' + ip, 40, 10 * MIN)) return true;
       const c = verify(body.mfaToken, 'mfa'), u = c && await store.userById(c.sub); if (!u || !u.mfa) return fail(res, 401, 'Sign in again', { code: 'auth' }), true;
       const wait = await AL.over('mfa:' + u.id, 5); if (wait) return tooMany(wait), true;
       const code = String(body.code || '').trim(); let good = false; const before = JSON.stringify(u.mfa);
@@ -188,11 +195,11 @@ async function handle(req, res, p, m, b, { send, fail }) {
       else { const h = sha(code.toLowerCase().replace(/\s/g, '')), i = (u.mfa.rec || []).indexOf(h); if (i >= 0) { u.mfa.rec.splice(i, 1); good = true; } }
       if (!good) { await AL.hit('mfa:' + u.id, 5, 5 * MIN); return fail(res, 401, 'That code is not right', { code: 'bad' }), true; }
       if (!(await store.mfaCommit(u, before))) return fail(res, 401, 'That code is not right', { code: 'bad' }), true; // a code or recovery code works once, even across servers
-      cache.del(u.id); await AL.clear('mfa:' + u.id); send(res, 200, await startSession(req, res, u)); return true;
+      dropProfile(u.id); await AL.clear('mfa:' + u.id); send(res, 200, await startSession(req, res, u)); return true;
     }
     // ── silent sign-in on page load / token renewal: the refresh token rotates every time
     if (m === 'POST' && p === '/api/auth/refresh') {
-      if (!csrf()) return fail(res, 400, 'Bad request'), true; if (guard('rf:' + ip, 300, 10 * MIN)) return true;
+      if (!csrf()) return fail(res, 400, 'Bad request'), true; if (await guard('rf:' + ip, 300, 10 * MIN)) return true;
       const tok = cookieOf(req, 'idr'); if (!tok) return fail(res, 401, 'Not signed in', { code: 'auth' }), true;
       const h = sha(tok), f = await store.famByHash(h);
       const drop = () => { setRefresh(req, res, '', 0); return fail(res, 401, 'Not signed in', { code: 'auth' }), true; };
@@ -211,11 +218,11 @@ async function handle(req, res, p, m, b, { send, fail }) {
     if (!p.startsWith('/api/auth/')) return false;
     if (m === 'POST' && (p === '/api/auth/forgot' || p === '/api/auth/reset')) {
       if (p.endsWith('forgot')) { // always the same answer, so nobody can use this to discover who has an account
-        if (guard('fg:' + ip, 10, HOUR)) return true;
-        const id = parseId(body.identifier, body.dial); if (id && RL.hit('fgid:' + id.key, 3, HOUR).ok) { const u = await findUser(id); if (u) { const tok = crypto.randomBytes(32).toString('base64url'); await store.resetPut(sha(tok), u.id, Date.now() + 30 * MIN); notify(id.email || id.phone, 'Reset your Instadrop password', 'Open /?reset=' + tok + ' (valid 30 minutes)'); } }
+        if (await guard('fg:' + ip, 10, HOUR)) return true;
+        const id = parseId(body.identifier, body.dial); if (id && (await IPL.hit('fgid:' + id.key, 3, HOUR)).ok) { const u = await findUser(id); if (u) { const tok = crypto.randomBytes(32).toString('base64url'); await store.resetPut(sha(tok), u.id, Date.now() + 30 * MIN); notify(id.email || id.phone, 'Reset your Instadrop password', 'Open /?reset=' + tok + ' (valid 30 minutes)'); } }
         send(res, 200, { ok: true }); return true;
       }
-      if (guard('rs:' + ip, 20, HOUR)) return true;
+      if (await guard('rs:' + ip, 20, HOUR)) return true;
       const th = sha(String(body.token || '')), e = await store.resetTake(th); if (!e) return fail(res, 400, 'This reset link has expired. Ask for a new one', { code: 'expired' }), true;
       const u = await store.userById(e.uid), prob = u && pwProblem(body.password, u.name, u.email, u.phone); if (!u) return fail(res, 400, 'This reset link has expired. Ask for a new one', { code: 'expired' }), true;
       if (prob) { await store.resetPut(th, u.id, e.exp); return fail(res, 400, prob, { code: 'weak' }), true; } // a too-weak password does not burn the link
@@ -259,4 +266,4 @@ async function handle(req, res, p, m, b, { send, fail }) {
   } catch (e) { if (busy(e)) return true; throw e; }
 }
 
-module.exports = { handle, ready, store, user: claims, ipOf, limiter: RL, flush: () => store.close(), CFG, _t: { hotp, unb32, parseId, pwProblem, verify, sign } };
+module.exports = { handle, ready, store, user: claims, ipOf, limiter: IPL, flush: () => store.close(), CFG, _t: { hotp, unb32, parseId, pwProblem, verify, sign } };

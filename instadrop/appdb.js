@@ -3,7 +3,7 @@
 // database in small batches. On start it loads from the database; an empty database is filled from data.json (if present) or the demo seed.
 'use strict';
 const fs = require('fs');
-module.exports = function appDb(pool) {
+module.exports = function appDb(pool, bus) {
   const known = new Map(), kvKnown = new Map(), pendingOrders = new Map(), touched = new Set();
   let timer = null, restTimer = null, chain = Promise.resolve(), db = null;
   const j = JSON.stringify;
@@ -20,7 +20,7 @@ module.exports = function appDb(pool) {
 
   async function writeRest(full) {
     if (!db) return;
-    const ups = [], gone = new Set(known.keys());
+    const ups = [], sentKv = [], gone = new Set(known.keys());
     for (const v of db.vendors) { gone.delete(v.id); const s = j(v); if (known.get(v.id) !== s) ups.push([v, s]); }
     const kv = full ? (() => { const e = [['seeded', db.seeded ?? null]]; for (const k in db.loyalty || {}) e.push(['loyalty:' + k, db.loyalty[k]]); for (const k in db.groups || {}) e.push(['group:' + k, db.groups[k]]); return e; })() : kvEntries(); touched.clear();
     await pool.tx(async c => {
@@ -28,15 +28,24 @@ module.exports = function appDb(pool) {
       for (const id of gone) { await c.query('delete from vendors where id=$1', [id]); known.delete(id); }
       for (const [k, v] of kv) {
         if (v === undefined) { if (kvKnown.has(k)) { await c.query('delete from kv where key=$1', [k]); kvKnown.delete(k); } continue; }
-        const s = j(v); if (kvKnown.get(k) === s) continue; await c.query('insert into kv(key,value) values ($1,$2) on conflict (key) do update set value=$2', [k, v]); kvKnown.set(k, s);
+        const s = j(v); if (kvKnown.get(k) === s) continue; await c.query('insert into kv(key,value) values ($1,$2) on conflict (key) do update set value=$2', [k, v]); kvKnown.set(k, s); sentKv.push([k, v]);
       }
     });
+    // after the commit, tell the other servers what changed (menus, prices, loyalty points, group carts)
+    if (bus && (ups.length || gone.size || sentKv.length)) { bus.publish('data', { v: ups.map(u => u[0]), gone: [...gone], kv: sentKv.filter(e => e[0] !== 'seeded') }); }
   }
   async function writeOrders() {
     const os = [...pendingOrders.values()]; pendingOrders.clear(); if (!os.length) return;
     try { await pool.tx(async c => { for (const o of os) await c.query('insert into orders(id,user_id,vendor_id,region,status,at,body) values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do update set status=$5, body=$7', orderVals(o)); }); }
     catch (e) { console.error('[db] order write failed, will retry:', e.message); for (const o of os) if (!pendingOrders.has(o.id)) pendingOrders.set(o.id, o); timer = setTimeout(flushOrders, 2000); }
   }
+  // another server changed vendors or loyalty/group data: take it without writing it back
+  if (bus) bus.handle('data', d => {
+    if (!db) return;
+    for (const v of d.v || []) { const i = db.vendors.findIndex(x => x.id === v.id); if (i >= 0) db.vendors[i] = v; else db.vendors.push(v); known.set(v.id, j(v)); }
+    for (const id of d.gone || []) { const i = db.vendors.findIndex(x => x.id === id); if (i >= 0) db.vendors.splice(i, 1); known.delete(id); }
+    for (const [k, v] of d.kv || []) { const [kind, id] = [k.slice(0, k.indexOf(':')), k.slice(k.indexOf(':') + 1)], bag = kind === 'loyalty' ? (db.loyalty = db.loyalty || {}) : (db.groups = db.groups || {}); if (v === undefined || v === null) delete bag[id]; else bag[id] = v; kvKnown.set(k, j(v)); }
+  });
   const run = fn => (chain = chain.then(fn).catch(e => console.error('[db] write failed:', e.message)));
   const flushOrders = () => { timer = null; return run(writeOrders); };
   const flushRest = () => { restTimer = null; return run(() => writeRest(false)); };

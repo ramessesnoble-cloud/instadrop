@@ -34,12 +34,22 @@ Set `DATABASE_URL` and everything is stored in PostgreSQL instead of files:
 - Accounts, sessions, reset links and login-failure counters are read and written in the database, so **any number of servers can share them** (log in on one, refresh on another). Vendors, orders, loyalty and group carts are saved to the database and loaded into memory at start.
 - `PG_POOL` sets connections per server (default 10).
 
+### Redis (optional, for several servers)
+Add `REDIS_URL=redis://:password@host:6379/0` (`rediss://` for TLS) to link servers together:
+
+- **Shared rate limits**: per-IP flood limits and login/MFA guess counters are counted in Redis, so they hold across all servers.
+- **Live updates between servers**: an order, menu edit or loyalty change on one server reaches the others at once, and customers watching live tracking on any server get the push.
+- **Profile cache invalidation** across servers.
+- If Redis goes down, sign-in keeps working with local limits and reconnects by itself (`/api/health` shows `redis: up|down|off`). Redis holds no data you cannot lose: PostgreSQL stays the source of truth.
+- Like PostgreSQL there is no driver to install (`redis.js`). Keep Redis on a private network with a password: orders travel through it.
+
 ### Environment variables
 | Variable | Purpose |
 |---|---|
 | `JWT_SECRET` | Required in production (32+ chars), identical on every server. In development a `.jwt-secret` file is created. |
 | `NODE_ENV=production` | Enforces the secret and secure cookies. |
 | `DATABASE_URL` | PostgreSQL connection string. Unset = files. |
+| `REDIS_URL` | Redis connection string. Unset = no cross-server features. `REDIS_TIMEOUT_MS` (default 800) caps each command. |
 | `DATA_DIR` | Where journals and the dev secret are written in file mode. |
 | `TRUST_PROXY=1` | Read the client IP from `X-Forwarded-For` (only behind your own load balancer). |
 | `HASH_CONCURRENCY` / `HASH_QUEUE` | Parallel password hashes per server (default 4) and queue length before answering 503. |

@@ -1,5 +1,5 @@
 // Instadrop service worker: the app shell opens instantly and works offline. API calls and live streams are never cached.
-const V = 'instadrop-v3', SHELL = ['/', '/css/app.css', '/js/app.js', '/js/i18n.js', '/icon.svg', '/manifest.webmanifest'];
+const V = 'instadrop-v5', SHELL = ['/', '/css/app.css', '/js/app.js', '/js/i18n.js', '/js/icons.js', '/js/i18n-auth.js', '/js/auth-ui.js', '/icon-192.png', '/icon.svg', '/manifest.webmanifest'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {
